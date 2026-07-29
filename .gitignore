@@ -17,6 +17,11 @@ dist/
 build/
 .DS_Store
 
+# Per-machine endpoint identity (regenerated on first run) — never track
+endpoint_agent/endpoint_config.json
+# Built launcher executables (rebuild locally via launcher/build_launchers.ps1)
+XDR-Launcher/
+
 # Raw ML training datasets (tens of GB) — kept local only, never pushed
 Network Behavior/CICDS_dataset/
 Network Behavior/Wire shark/

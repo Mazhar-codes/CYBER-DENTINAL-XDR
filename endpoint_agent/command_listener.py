@@ -29,7 +29,10 @@ from typing import Any, Callable
 import httpx
 import psutil
 
-from . import identity as _identity_mod
+try:
+    from . import identity as _identity_mod
+except ImportError:  # loaded as a top-level module (agent.py adds dir to sys.path)
+    import identity as _identity_mod
 
 logger = logging.getLogger(__name__)
 

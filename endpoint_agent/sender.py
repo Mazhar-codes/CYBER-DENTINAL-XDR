@@ -78,10 +78,12 @@ async def send_telemetry(
 
             except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError) as exc:
                 logger.warning(
-                    "Telemetry send network error (attempt %d/%d): %s",
+                    "Telemetry send network error (attempt %d/%d): %s: %r  [url=%s]",
                     attempt,
                     _MAX_ATTEMPTS,
+                    type(exc).__name__,
                     exc,
+                    getattr(getattr(exc, "request", None), "url", "?"),
                 )
 
             except Exception as exc:
