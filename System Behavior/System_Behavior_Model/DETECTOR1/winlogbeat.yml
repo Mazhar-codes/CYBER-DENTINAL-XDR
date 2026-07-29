@@ -1,0 +1,23 @@
+winlogbeat.event_logs:
+  - name: Microsoft-Windows-Sysmon/Operational
+    enabled: true
+  - name: Security
+    enabled: true
+  - name: System
+    enabled: true
+
+output.file:
+  path: "C:/winlogbeat/logs"
+  filename: sysmon_events.json
+  rotate_every_kb: 10240
+  number_of_files: 5
+  permissions: 0644
+  codec.json:
+    pretty: false
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: C:/winlogbeat/logs
+  name: winlogbeat
+  keepfiles: 7

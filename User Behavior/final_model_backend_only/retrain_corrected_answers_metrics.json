@@ -1,0 +1,34 @@
+{
+  "dataset": "corrected_answers_combined",
+  "raw_rows": 339,
+  "trainable_samples_user_day": 53,
+  "augmented_samples_total": 1005,
+  "label_distribution": {
+    "normal_0": 43,
+    "anomaly_1": 10
+  },
+  "threshold": 0.54,
+  "test_size": 302,
+  "tp": 97,
+  "fp": 6,
+  "tn": 188,
+  "fn": 11,
+  "precision": 0.9417,
+  "recall": 0.8981,
+  "f1": 0.9194,
+  "fpr": 0.0309,
+  "features": [
+    "total_logins",
+    "avg_login_hour",
+    "std_login_hour",
+    "device_events",
+    "files_accessed",
+    "emails_sent",
+    "emails_cc",
+    "O",
+    "C",
+    "E",
+    "A",
+    "N"
+  ]
+}

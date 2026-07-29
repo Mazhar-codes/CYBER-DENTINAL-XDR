@@ -1,0 +1,28 @@
+/* preview card shared base */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;700&display=swap');
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #0a1120;
+  color: #f1f5f9;
+  -webkit-font-smoothing: antialiased;
+  width: 700px;
+}
+.card {
+  width: 700px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background:
+    linear-gradient(rgba(59,130,246,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.04) 1px, transparent 1px),
+    #0a1120;
+  background-size: 40px 40px, 40px 40px, auto;
+}
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.eyebrow {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.5px; color: #475569;
+}
+.mono { font-family: 'Fira Code', monospace; }

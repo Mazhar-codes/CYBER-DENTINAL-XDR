@@ -1,0 +1,186 @@
+<!--
+  sysmonconfig.xml
+  ════════════════════════════════════════════════════════════════
+  Sysmon configuration for Windows Anomaly Detection
+  Captures: DLL loads, process creation, network, registry, files
+  ════════════════════════════════════════════════════════════════
+
+  INSTALL:
+    sysmon64.exe -accepteula -i sysmonconfig.xml
+
+  UPDATE:
+    sysmon64.exe -c sysmonconfig.xml
+
+  UNINSTALL:
+    sysmon64.exe -u force
+-->
+
+<Sysmon schemaversion="4.90">
+
+  <!-- Hash algorithms for file tracking -->
+  <HashAlgorithms>SHA256</HashAlgorithms>
+  <CheckRevocation/>
+
+  <EventFiltering>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 1 — Process Creation
+         Captures every new process with full command line.
+         Critical for detecting: cmd.exe, powershell.exe, mshta.exe
+         launched from unexpected parents.
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="ProcessCreate" groupRelation="or">
+      <ProcessCreate onmatch="include">
+        <!-- Capture ALL process creation — our model needs the sequence -->
+        <Rule name="All" groupRelation="or">
+          <Image condition="contains">.</Image>
+        </Rule>
+      </ProcessCreate>
+    </RuleGroup>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 3 — Network Connection
+         Captures outbound connections: C2 beacons, lateral movement.
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="NetworkConnect" groupRelation="or">
+      <NetworkConnect onmatch="include">
+        <!-- Capture all network connections -->
+        <Rule name="All" groupRelation="or">
+          <Image condition="contains">.</Image>
+        </Rule>
+      </NetworkConnect>
+      <NetworkConnect onmatch="exclude">
+        <!-- Exclude very noisy benign local traffic -->
+        <DestinationIp condition="is">127.0.0.1</DestinationIp>
+        <DestinationIp condition="is">::1</DestinationIp>
+        <DestinationPort condition="is">53</DestinationPort>
+      </NetworkConnect>
+    </RuleGroup>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 5 — Process Terminate
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="ProcessTerminate" groupRelation="or">
+      <ProcessTerminate onmatch="include">
+        <Rule name="All" groupRelation="or">
+          <Image condition="contains">.</Image>
+        </Rule>
+      </ProcessTerminate>
+    </RuleGroup>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 7 — Image/DLL Load  ← MOST IMPORTANT
+         This is the direct equivalent of GHC trace tokens.
+         kernel32.dll loaded by process → "kernel32.dll+ImageLoad"
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="ImageLoad" groupRelation="or">
+      <ImageLoad onmatch="include">
+        <!-- Capture ALL DLL loads — this is our GHC equivalent -->
+        <Rule name="All" groupRelation="or">
+          <ImageLoaded condition="contains">.dll</ImageLoaded>
+        </Rule>
+      </ImageLoad>
+      <ImageLoad onmatch="exclude">
+        <!-- Exclude very common low-value DLLs to reduce noise -->
+        <!-- Comment these out if you want maximum coverage -->
+        <!--
+        <ImageLoaded condition="end with">ntdll.dll</ImageLoaded>
+        <ImageLoaded condition="end with">kernel32.dll</ImageLoaded>
+        -->
+      </ImageLoad>
+    </RuleGroup>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 8 — CreateRemoteThread  ← HIGH RISK
+         Process injecting code into another process.
+         Always alert on this.
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="CreateRemoteThread" groupRelation="or">
+      <CreateRemoteThread onmatch="include">
+        <Rule name="All" groupRelation="or">
+          <SourceImage condition="contains">.</SourceImage>
+        </Rule>
+      </CreateRemoteThread>
+      <CreateRemoteThread onmatch="exclude">
+        <!-- Known-safe remote thread creators -->
+        <SourceImage condition="end with">csrss.exe</SourceImage>
+      </CreateRemoteThread>
+    </RuleGroup>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 10 — ProcessAccess
+         One process opening handle to another (credential dumping,
+         injection).
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="ProcessAccess" groupRelation="or">
+      <ProcessAccess onmatch="include">
+        <!-- Focus on access to sensitive processes -->
+        <TargetImage condition="end with">lsass.exe</TargetImage>
+        <TargetImage condition="end with">winlogon.exe</TargetImage>
+        <TargetImage condition="end with">csrss.exe</TargetImage>
+        <TargetImage condition="end with">services.exe</TargetImage>
+        <GrantedAccess condition="is">0x1010</GrantedAccess>
+        <GrantedAccess condition="is">0x1410</GrantedAccess>
+        <GrantedAccess condition="is">0x40</GrantedAccess>
+        <GrantedAccess condition="is">0x1fffff</GrantedAccess>
+      </ProcessAccess>
+    </RuleGroup>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 11 — FileCreate
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="FileCreate" groupRelation="or">
+      <FileCreate onmatch="include">
+        <!-- Executables and scripts dropped to disk -->
+        <TargetFilename condition="end with">.exe</TargetFilename>
+        <TargetFilename condition="end with">.dll</TargetFilename>
+        <TargetFilename condition="end with">.ps1</TargetFilename>
+        <TargetFilename condition="end with">.vbs</TargetFilename>
+        <TargetFilename condition="end with">.bat</TargetFilename>
+        <TargetFilename condition="end with">.hta</TargetFilename>
+        <TargetFilename condition="end with">.js</TargetFilename>
+        <TargetFilename condition="contains">Temp\</TargetFilename>
+        <TargetFilename condition="contains">AppData\</TargetFilename>
+      </FileCreate>
+    </RuleGroup>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 12/13 — Registry
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="RegistryEvent" groupRelation="or">
+      <RegistryEvent onmatch="include">
+        <!-- Persistence locations -->
+        <TargetObject condition="contains">Run</TargetObject>
+        <TargetObject condition="contains">RunOnce</TargetObject>
+        <TargetObject condition="contains">Services</TargetObject>
+        <TargetObject condition="contains">CurrentVersion\Image File Execution Options</TargetObject>
+        <TargetObject condition="contains">Winlogon</TargetObject>
+        <TargetObject condition="contains">AppInit_DLLs</TargetObject>
+      </RegistryEvent>
+    </RuleGroup>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 22 — DNS Query
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="DnsQuery" groupRelation="or">
+      <DnsQuery onmatch="include">
+        <Rule name="All" groupRelation="or">
+          <Image condition="contains">.</Image>
+        </Rule>
+      </DnsQuery>
+    </RuleGroup>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EventID 25 — Process Tampering  ← HIGH RISK
+         Process hollowing, herpaderping.
+         ═══════════════════════════════════════════════════════ -->
+    <RuleGroup name="ProcessTampering" groupRelation="or">
+      <ProcessTampering onmatch="include">
+        <Rule name="All" groupRelation="or">
+          <Image condition="contains">.</Image>
+        </Rule>
+      </ProcessTampering>
+    </RuleGroup>
+
+  </EventFiltering>
+</Sysmon>

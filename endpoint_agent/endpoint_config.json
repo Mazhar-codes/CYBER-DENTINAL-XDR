@@ -1,0 +1,10 @@
+{
+  "endpoint_id": "6fcd40d1-6791-432f-a6bc-4ae76537a7b5",
+  "hostname": "Annas",
+  "ip_address": "192.168.1.8",
+  "os": "Windows",
+  "os_version": "10.0.26200",
+  "username": "DELL",
+  "agent_version": "1.0.0",
+  "network_interface": "Wi-Fi"
+}

@@ -1,0 +1,150 @@
+/* =========================================================
+ * Cyber Sentinel XDR — Theme System
+ * Two themes: "dark" (cybersecurity navy) and "light" (warm cream)
+ * Applied via data-theme attribute on document.documentElement
+ * Values must stay in sync with src/theme/themeConfig.ts
+ * ========================================================= */
+
+/* ── Dark theme (default) ─────────────────────────────────── */
+[data-theme="dark"] {
+  --bg-primary:    #070A0F;
+  --bg-secondary:  #1A1F2E;
+  --bg-card:       #0F1520;
+  --bg-card-hover: #1A2333;
+  --bg-sidebar:    #050709;
+  --bg-surface:    #141B28;
+  --bg-input:      #1A2333;
+
+  --text-primary:   #F5F5F5;
+  --text-secondary: #94a3b8;
+  --text-muted:     #64748b;
+  --text-heading:   #FFFFFF;
+
+  --border-color:        rgba(47,224,224,0.10);
+  --border-color-strong: rgba(47,224,224,0.20);
+
+  --accent-cyan:     #2FE0E0;
+  --accent-cyan-dim: rgba(47,224,224,0.15);
+  --accent-green:    #10b981;
+  --accent-amber:    #f59e0b;
+  --accent-red:      #ef4444;
+  --accent-purple:   #8b5cf6;
+  --accent-blue:     #458393;
+
+  --severity-critical: #ff2d55;
+  --severity-high:     #ff6b35;
+  --severity-medium:   #f59e0b;
+  --severity-low:      #10b981;
+
+  --scrollbar-track:       #070A0F;
+  --scrollbar-thumb:       #1e293b;
+  --scrollbar-thumb-hover: #334155;
+
+  --table-header-bg: rgba(47,224,224,0.06);
+  --table-row-hover: rgba(255,255,255,0.03);
+  --table-border:    rgba(47,224,224,0.08);
+
+  --modal-bg:      #0F1520;
+  --modal-overlay: rgba(0,0,0,0.75);
+
+  --shadow-sm:        0 1px 4px rgba(0,0,0,0.50);
+  --shadow-md:        0 2px 12px rgba(0,0,0,0.60);
+  --shadow-lg:        0 4px 24px rgba(0,0,0,0.70);
+  --shadow-glow-cyan: 0 0 20px rgba(47,224,224,0.20);
+}
+
+/* ── Light theme — warm cream ─────────────────────────────── */
+[data-theme="light"] {
+  --bg-primary:    #FFF3C8;
+  --bg-secondary:  #E5CB90;
+  --bg-card:       #FFFBE8;
+  --bg-card-hover: #FFF7D6;
+  --bg-sidebar:    #2A5A5E;
+  --bg-surface:    #FFF8DC;
+  --bg-input:      #FFFAE0;
+
+  --text-primary:   #1a1a1a;
+  --text-secondary: #4a4a4a;
+  --text-muted:     #7a7a6a;
+  --text-heading:   #0a0a0a;
+
+  --border-color:        rgba(52,169,157,0.25);
+  --border-color-strong: rgba(52,169,157,0.45);
+
+  --accent-cyan:     #34A99D;
+  --accent-cyan-dim: rgba(52,169,157,0.15);
+  --accent-green:    #1a9a6a;
+  --accent-amber:    #c07a00;
+  --accent-red:      #dc2626;
+  --accent-purple:   #7c3aed;
+  --accent-blue:     #458393;
+
+  --severity-critical: #dc2626;
+  --severity-high:     #ea580c;
+  --severity-medium:   #ca8a04;
+  --severity-low:      #15803d;
+
+  --scrollbar-track:       #E5CB90;
+  --scrollbar-thumb:       #c5a870;
+  --scrollbar-thumb-hover: #a58850;
+
+  --table-header-bg: rgba(52,169,157,0.08);
+  --table-row-hover: rgba(52,169,157,0.05);
+  --table-border:    rgba(52,169,157,0.15);
+
+  --modal-bg:      #FFFBE8;
+  --modal-overlay: rgba(0,0,0,0.45);
+
+  --shadow-sm:        0 1px 4px rgba(0,0,0,0.10);
+  --shadow-md:        0 2px 12px rgba(0,0,0,0.14);
+  --shadow-lg:        0 4px 24px rgba(0,0,0,0.18);
+  --shadow-glow-cyan: 0 0 20px rgba(52,169,157,0.20);
+}
+
+/* ── Sidebar always uses dark-on-dark text in light mode ─── */
+/* Because --bg-sidebar is a dark teal in light mode, we re-scope  */
+/* the text/border vars inside the sidebar subtree so they stay    */
+/* legible (light text on dark teal background).                   */
+[data-theme="light"] [data-sidebar="true"] {
+  --text-primary:        #F5F5F5;
+  --text-secondary:      #CBD5E1;
+  --text-muted:          #94a3b8;
+  --text-heading:        #FFFFFF;
+  --border-color:        rgba(255,255,255,0.12);
+  --border-color-strong: rgba(255,255,255,0.22);
+  --bg-card:             rgba(255,255,255,0.08);
+  --bg-secondary:        rgba(255,255,255,0.05);
+  --accent-cyan:         #5EDCD6;
+  --accent-cyan-dim:     rgba(94,220,214,0.15);
+}
+
+/* ── Smooth theme transition on the root elements ─────────── */
+*,
+*::before,
+*::after {
+  transition:
+    background-color 0.3s ease,
+    border-color 0.3s ease,
+    color 0.3s ease,
+    box-shadow 0.3s ease;
+}
+
+/* Exclude transitions that would cause animation jank */
+*[class*="motion"],
+*[style*="animation"],
+canvas,
+svg {
+  transition: none !important;
+}
+
+/* ── Theme-aware body background ──────────────────────────── */
+body {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary);
+}
+
+/* ── Scrollbar (theme-aware) ──────────────────────────────── */
+::-webkit-scrollbar              { width: 6px; height: 6px; }
+::-webkit-scrollbar-track        { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-thumb-hover); }

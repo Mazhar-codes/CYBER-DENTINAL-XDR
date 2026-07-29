@@ -1,0 +1,9 @@
+# Cyber Sentinel XDR — Endpoint Agent dependencies
+# Install with:  pip install -r requirements.txt
+#
+# Tested on Python 3.11+ (Windows 10/11).
+# psutil must be >= 5.9.0 for net_connections(kind='inet') on Windows.
+# httpx replaces the stdlib urllib / requests for async HTTP.
+
+httpx>=0.27.0
+psutil>=5.9.0

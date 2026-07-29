@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"></head>
+<body><div class="card">
+<div class="row" style="gap:10px">
+<button class="b primary">Start Monitoring</button>
+<button class="b danger">Stop Monitoring</button>
+<button class="b dark">Audit Log</button>
+<button class="b warn"><span style="font-size:13px">⚡</span>Simulate Attack</button>
+</div>
+<div class="row" style="gap:10px">
+<button class="b ghost">Sign Out</button>
+<button class="b respond">RESPOND</button>
+<button class="b disabled" disabled>Disabled</button>
+<button class="b enable"><span style="font-size:12px">🔔</span>Enable Sound Alerts</button>
+</div>
+<style>
+.b{padding:7px 16px;border-radius:8px;border:none;color:#fff;font-weight:700;font-size:12px;cursor:pointer;letter-spacing:0.5px;font-family:inherit;transition:all .15s}
+.primary{background:linear-gradient(135deg,#3b82f6,#1d4ed8)}
+.danger{background:linear-gradient(135deg,#ef4444,#b91c1c)}
+.warn{background:linear-gradient(135deg,#dc2626,#b91c1c);display:inline-flex;align-items:center;gap:6px}
+.dark{background:#1e293b;border:1px solid rgba(0,212,255,0.5);color:#00d4ff}
+.ghost{background:transparent;border:1px solid rgba(255,51,102,0.25);color:#ff6688}
+.respond{background:rgba(220,38,38,0.1);border:1px solid rgba(220,38,38,0.45);color:#fca5a5;font-size:10px;letter-spacing:0.5px;padding:5px 12px;border-radius:6px;text-transform:uppercase}
+.disabled{background:#1e293b;color:#334155;cursor:not-allowed}
+.enable{background:rgba(255,180,0,0.07);border:1px solid rgba(255,180,0,0.35);color:#ffb800;font-size:11px;display:inline-flex;align-items:center;gap:6px;padding:6px 13px}
+</style>
+</div></body></html>

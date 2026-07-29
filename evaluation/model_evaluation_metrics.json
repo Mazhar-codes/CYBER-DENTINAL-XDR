@@ -1,0 +1,47 @@
+{
+  "generated_at": "2026-06-20T20:01:25.268448",
+  "project": "Cyber Sentinel XDR",
+  "evaluation_method": "Hold-out test set (20 % \u2014 never seen during training)",
+  "network": {
+    "accuracy": 0.942469,
+    "precision": 0.988557,
+    "recall": 0.860463,
+    "f1": 0.920073,
+    "roc_auc": 0.986156,
+    "pr_auc": 0.981051
+  },
+  "user_behavior": {
+    "accuracy": 0.995872,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "roc_auc": 0.830186,
+    "pr_auc": 0.01316
+  },
+  "system_monitor": {
+    "accuracy": 0.989053,
+    "precision": 0.99068,
+    "recall": 0.998343,
+    "f1": 0.994496,
+    "roc_auc": 0.7344,
+    "pr_auc": 0.996767
+  },
+  "malware": {
+    "accuracy": 0.933733,
+    "precision": 0.914643,
+    "recall": 0.95644,
+    "f1": 0.935075,
+    "roc_auc": 0.984081,
+    "pr_auc": 0.985879
+  },
+  "fusion_weights": {
+    "network": 0.35,
+    "malware": 0.3,
+    "user": 0.2,
+    "system": 0.15
+  },
+  "severity_thresholds": {
+    "high": 0.7,
+    "critical": 0.85
+  }
+}

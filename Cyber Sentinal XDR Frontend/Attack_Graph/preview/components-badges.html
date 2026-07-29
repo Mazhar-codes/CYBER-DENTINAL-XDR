@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"></head>
+<body><div class="card">
+<div class="row" style="gap:8px">
+<span class="b" style="--c:#dc2626">CRITICAL</span>
+<span class="b" style="--c:#ea580c">HIGH</span>
+<span class="b" style="--c:#d97706">MEDIUM</span>
+<span class="b" style="--c:#22c55e">LOW</span>
+<span class="live"><span class="dot"></span>LIVE</span>
+<span class="resp">RESPOND</span>
+</div>
+<div class="row" style="gap:8px">
+<span class="chip" style="--c:#60a5fa">Network</span>
+<span class="chip" style="--c:#a78bfa">User Behavior</span>
+<span class="chip" style="--c:#f97316">Sysmon</span>
+<span class="chip" style="--c:#7c3aed">Malware</span>
+<span class="chip" style="--c:#3b82f6">Endpoint</span>
+</div>
+<style>
+.b{display:inline-flex;align-items:center;gap:5px;background:color-mix(in srgb, var(--c) 10%, transparent);color:var(--c);border:1px solid color-mix(in srgb, var(--c) 27%, transparent);border-radius:20px;padding:3px 12px;font-weight:700;font-size:11px;letter-spacing:0.5px}
+.b::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--c);box-shadow:0 0 6px var(--c)}
+.live{display:inline-flex;align-items:center;gap:6px;background:#052e16;color:#22c55e;border:1px solid #166534;border-radius:20px;padding:3px 12px;font-size:10px;font-weight:700;letter-spacing:1px}
+.live .dot{width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e}
+.resp{background:#dc2626;color:#fff;border-radius:10px;padding:2px 9px;font-size:9px;font-weight:800;letter-spacing:0.5px;box-shadow:0 0 8px rgba(220,38,38,0.6)}
+.chip{background:color-mix(in srgb, var(--c) 12%, transparent);color:var(--c);border:1px solid color-mix(in srgb, var(--c) 30%, transparent);border-radius:6px;padding:4px 10px;font-weight:700;font-size:11px;letter-spacing:0.5px}
+</style>
+</div></body></html>

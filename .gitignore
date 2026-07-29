@@ -1,0 +1,48 @@
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+ml_training_env/
+*.pkl
+*.pt
+*.log
+reports/
+quarantine/
+mongodb/
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# Raw ML training datasets (tens of GB) — kept local only, never pushed
+Network Behavior/CICDS_dataset/
+Network Behavior/Wire shark/
+User Behavior/final_model_backend_only/r4.2/
+User Behavior/final_model_backend_only/Dataset/
+User Behavior/final_model_backend_only/logs/
+User Behavior/winlogbeat-9.3.3-windows-x86_64/
+System Behavior/Dataset_1/
+Malware Behavior/
+
+# Superseded by git history now that version control is in place
+__BACKUP_src_before_ui_enhancement/
+
+# Runtime model artifacts actually loaded by backend.py — exceptions to the
+# blanket *.pkl/*.pt rule above so a fresh clone can run without retraining
+!Backend/malware_feature_names.pkl
+!Backend/malware_model.pkl
+!Backend/malware_scaler.pkl
+!Backend/network_classifier.pkl
+!Backend/network_features.pkl
+!Backend/network_label_encoder.pkl
+!Backend/network_model_isolation.pkl
+!Backend/network_scaler.pkl
+!Backend/personal_baseline_model.pkl
+!Backend/system_model.pt
+!Backend/system_scaler.pkl
+!User Behavior/final_model_backend_only/user_model.pkl
+!User Behavior/final_model_backend_only/user_scaler.pkl
+!System Behavior/System_Behavior_Model/DETECTOR1/saved_model_v3/detector.pkl

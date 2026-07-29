@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cyber Sentinel XDR — Cinematic Boot</title>
+<link rel="stylesheet" href="cinematic.css" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div class="stage" id="stage" data-screen-label="Cinematic Boot">
+  <!-- Persistent backdrop layers -->
+  <div class="grid-bg"></div>
+  <canvas class="fx" id="fx"></canvas>
+  <div class="radar"><div class="sweep"></div></div>
+  <div class="horizon-scan"></div>
+
+  <!-- HUD chrome -->
+  <div class="hud hud-corner tl"></div>
+  <div class="hud hud-corner tr"></div>
+  <div class="hud hud-corner bl"></div>
+  <div class="hud hud-corner br"></div>
+
+  <div class="hud hud-top">
+    <span class="dot"></span>
+    <span>SYS · CYBER-SENTINEL-XDR · v3.07.4</span>
+    <span style="opacity:.6">|</span>
+    <span id="utc-clock">UTC 00:00:00</span>
+    <span style="opacity:.6">|</span>
+    <span>OPS-CENTER / NODE-7A</span>
+  </div>
+
+  <div class="hud hud-meta tl-meta">
+    <div>STATUS &nbsp;<b>ONLINE</b></div>
+    <div>UPLINK &nbsp;<b>SECURE · TLS 1.3</b></div>
+    <div>SHARDS &nbsp;<b>14 / 14</b></div>
+  </div>
+  <div class="hud hud-meta tr-meta">
+    <div>LAT &nbsp;47.6062°N</div>
+    <div>LON &nbsp;122.3321°W</div>
+    <div>SECTOR &nbsp;<b>NW-PACIFIC-04</b></div>
+  </div>
+  <div class="hud hud-meta bl-meta">
+    <div>FUSION &nbsp;<b class="grn">ARMED</b></div>
+    <div>SOAR &nbsp;<b class="grn">ARMED</b></div>
+    <div>SIRENS &nbsp;<b>STANDBY</b></div>
+  </div>
+  <div class="hud hud-meta br-meta">
+    <div>EPS &nbsp;<b id="hud-eps">12,847</b></div>
+    <div>NODES &nbsp;<b>1,204</b></div>
+    <div>OPEN INC &nbsp;<b class="red" id="hud-inc">0</b></div>
+  </div>
+
+  <button class="skip-btn" id="skip-btn">SKIP INTRO ›</button>
+  <button class="audio-btn" id="audio-btn" title="Toggle audio">
+    <svg class="icon-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>
+    <svg class="icon-on" style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 010 7.07"/><path d="M19.07 4.93a10 10 0 010 14.14"/></svg>
+  </button>
+
+  <!-- Title (Scene 1) -->
+  <div class="title-group" id="title-group">
+    <div class="title-eyebrow" id="title-eyebrow">EXTENDED · DETECTION · RESPONSE</div>
+    <div class="title-main glitch" data-text="CYBER SENTINEL">CYBER SENTINEL</div>
+    <div class="title-divider" id="title-divider"></div>
+    <div class="title-sub" id="title-sub">XDR // INITIALIZING</div>
+  </div>
+
+  <!-- Boot terminal -->
+  <div class="term" id="term"></div>
+
+  <!-- Boot progress -->
+  <div class="progress-shell" id="progress-shell" style="opacity:0; transition: opacity .6s ease">
+    <div class="row"><span>BOOTSTRAP SEQUENCE</span><span id="progress-pct">000%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <!-- Per-scene overlays -->
+  <div class="scene" id="scene-1"></div>
+
+  <!-- Scene 2 metric cards (cyberspace) -->
+  <div class="metric-card" id="m1" style="top: 26%; left: 7%;">
+    <div class="lbl">EVENTS / SEC</div>
+    <div class="val">12,847 <span class="u">EPS</span></div>
+  </div>
+  <div class="metric-card grn" id="m2" style="top: 40%; left: 7%;">
+    <div class="lbl">ENDPOINTS WATCHED</div>
+    <div class="val">1,204 <span class="u">NODES</span></div>
+  </div>
+  <div class="metric-card" id="m3" style="bottom: 26%; right: 7%;">
+    <div class="lbl">CORRELATION LATENCY</div>
+    <div class="val">0.42 <span class="u">MS</span></div>
+  </div>
+
+  <!-- Scene 3 fusion overlays -->
+  <div class="fusion-labels">
+    <div class="fusion-label tl"><span>NETWORK FLOWS</span><span class="num">412.6 GB/s</span></div>
+    <div class="fusion-label tr"><span>USER BEHAVIOR</span><span class="num">9,842 SESS</span></div>
+    <div class="fusion-label bl"><span>SYSTEM / SYSMON</span><span class="num">2.1 M EVT/s</span></div>
+    <div class="fusion-label br"><span>MALWARE ANALYSIS</span><span class="num">218 SAMPLES</span></div>
+  </div>
+  <div class="fusion-readout" id="fusion-readout">
+    <span class="chip">FUSION CORE <b>ACTIVE</b></span>
+    <span class="chip">SHAP <b>EXPLAINABLE</b></span>
+    <span class="chip">SEVERITY <b>NOMINAL</b></span>
+  </div>
+
+  <!-- Scene 4 alert + feed -->
+  <div class="alert-banner" id="alert-banner">
+    <span class="main">THREAT DETECTED</span>
+    <span class="sub">MULTI-STAGE INTRUSION · CORRELATION CONFIRMED</span>
+  </div>
+  <div class="flash-red" id="flash-red"></div>
+  <div class="flash-secure" id="flash-secure"></div>
+  <div class="event-feed" id="event-feed"></div>
+
+  <!-- Chapter -->
+  <div class="chapter">
+    <div class="ix" id="chapter-ix">SCENE 01 / 05</div>
+    <div class="nm" id="chapter-nm">AI BOOT SEQUENCE</div>
+  </div>
+
+  <!-- Login -->
+  <div class="login" id="login">
+    <div class="login-card">
+      <div class="login-status"><span class="d"></span> SECURE CHANNEL · TLS 1.3</div>
+
+      <div class="login-brand">
+        <div class="mark"><img src="assets/logo-cyber-sentinel.svg" alt="" /></div>
+        <div>
+          <div class="name">CYBER SENTINEL <span class="x">XDR</span></div>
+          <div class="tag">EXTENDED DETECTION &amp; RESPONSE</div>
+        </div>
+      </div>
+
+      <h2 class="login-h">Authenticate</h2>
+      <div class="login-sub">// MFA · BIOMETRIC · ROLE-BASED ACCESS</div>
+
+      <div class="field">
+        <label>Operator ID</label>
+        <input type="text" placeholder="agent.callsign" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>Cipher Key</label>
+        <input type="password" placeholder="••••••••••••••" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>MFA Token</label>
+        <input type="text" placeholder="•  •  •  •  •  •" maxlength="6" style="letter-spacing:8px; text-align:center;" />
+      </div>
+
+      <label style="display:block; font-family:var(--font-mono); font-size:10px; letter-spacing:2px; text-transform:uppercase; color:var(--fg-soft); margin:18px 0 8px;">Operator Role</label>
+      <div class="role-row">
+        <button type="button" class="role active">◈ ADMIN</button>
+        <button type="button" class="role">⬡ ANALYST</button>
+        <button type="button" class="role">◉ VIEWER</button>
+      </div>
+
+      <button type="button" class="login-btn" id="login-btn">AUTHENTICATE</button>
+
+      <div class="login-foot">
+        <span>SESSION <b style="color:var(--brand-cyan)">#A4F1-CC0E</b></span>
+        <a href="#" id="replay-link">▶ REPLAY INTRO</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="vignette"></div>
+  <div class="grain"></div>
+</div>
+
+<!-- Tweaks panel host -->
+<div id="tweaks-host"></div>
+
+<script src="cinematic.js"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="tweaks-app.jsx"></script>
+
+<script>
+  // UTC clock
+  function pad(n){return String(n).padStart(2,'0');}
+  function tick(){
+    const d = new Date();
+    document.getElementById('utc-clock').textContent =
+      'UTC ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds());
+  }
+  setInterval(tick, 1000); tick();
+
+  // EPS jitter
+  setInterval(() => {
+    const e = document.getElementById('hud-eps');
+    if (!e) return;
+    const n = 12000 + Math.floor(Math.random()*1500);
+    e.textContent = n.toLocaleString();
+  }, 1100);
+
+  // open incidents counter creeps up during attack
+  let inc = 0;
+  setInterval(() => {
+    const el = document.getElementById('hud-inc');
+    if (!el) return;
+    const phase = window.cinematic && document.getElementById('alert-banner');
+    if (phase && phase.style.opacity == '1') {
+      inc = Math.min(inc+1, 7);
+    } else {
+      inc = Math.max(0, inc-1);
+    }
+    el.textContent = String(inc);
+  }, 700);
+
+  // replay link
+  document.getElementById('replay-link').addEventListener('click', (e) => {
+    e.preventDefault();
+    window.cinematic.replay();
+  });
+</script>
+</body>
+</html>

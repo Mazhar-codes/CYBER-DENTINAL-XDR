@@ -1,0 +1,6 @@
+python -m uvicorn backend:sio_app --reload
+venv\Scripts\activate
+py -3.11 -m venv venv
+cd "D:\Cyber Sentinal\Network model"
+
+npm run dev

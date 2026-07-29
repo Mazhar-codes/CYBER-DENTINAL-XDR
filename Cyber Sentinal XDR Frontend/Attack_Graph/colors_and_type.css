@@ -1,0 +1,269 @@
+/* =============================================================
+   Cyber Sentinel XDR — Design Tokens
+   Color, typography, spacing, radius, shadow + glow system
+   Source of truth: src/styles/global.css + src/styles/theme.ts
+   ============================================================= */
+
+:root {
+  /* ─────────────  Surface / Background  ───────────── */
+  --bg-app:        #0a1120;                  /* main app shell */
+  --bg-deep:       #050b18;                  /* deepest cyber bg (auth pages) */
+  --bg-panel-1:    #1e293b;                  /* panel base (gradient stop A) */
+  --bg-panel-2:    #162032;                  /* panel base (gradient stop B) */
+  --bg-row:        #192334;                  /* zebra row alt */
+  --bg-sidebar-1:  #0d1629;                  /* sidebar gradient top */
+  --bg-sidebar-2:  #0a1120;                  /* sidebar gradient bottom */
+  --bg-table-head: #0f172a;                  /* table header */
+  --bg-card-glass: rgba(0, 20, 40, 0.85);    /* glass card */
+  --bg-card-soft:  rgba(0, 20, 40, 0.6);     /* glass with more transparency */
+
+  --grad-panel:    linear-gradient(135deg, #1e293b 0%, #162032 100%);
+  --grad-sidebar:  linear-gradient(180deg, #0d1629 0%, #0a1120 100%);
+  --grad-topbar:   linear-gradient(90deg,  #0d1629 0%, #0a1120 100%);
+  --grad-brand:    linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  --grad-danger:   linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+  --grad-success:  linear-gradient(135deg, #15803d 0%, #166534 100%);
+
+  /* ─────────────  Text  ───────────── */
+  --fg-primary:    #f1f5f9;                  /* page text, headlines */
+  --fg-secondary:  #e0f4ff;                  /* cool secondary, auth pages */
+  --fg-muted:      #94a3b8;                  /* paragraph muted */
+  --fg-soft:       #64748b;                  /* labels */
+  --fg-faint:      #475569;                  /* subtle (placeholder, hr) */
+  --fg-ghost:      #334155;                  /* most subtle (separator text) */
+
+  /* ─────────────  Brand / Action  ───────────── */
+  --brand-cyan:    #00d4ff;                  /* legacy primary (theme.ts) */
+  --brand-blue:    #3b82f6;                  /* primary action / nav active */
+  --brand-blue-2:  #1d4ed8;                  /* primary action gradient end */
+  --brand-blue-fg: #60a5fa;                  /* IP src, accents */
+  --brand-indigo:  #818cf8;                  /* IP dest accent */
+  --brand-violet:  #8b5cf6;                  /* secondary stat accent */
+  --brand-purple:  #7c3aed;                  /* malware accent */
+
+  /* ─────────────  Semantic / Severity  ───────────── */
+  --sev-critical:  #dc2626;                  /* CRITICAL */
+  --sev-high:      #ea580c;                  /* HIGH */
+  --sev-medium:    #d97706;                  /* MEDIUM */
+  --sev-low:       #22c55e;                  /* LOW / safe */
+  --sev-info:      #3b82f6;                  /* informational */
+
+  /* extended danger for auth/locked + hot red glows */
+  --hot-red:       #ff0044;                  /* critical glow */
+  --hot-red-2:     #ff3366;                  /* danger text glow */
+
+  /* attack-type palette (from ATTACK_COLOURS) */
+  --atk-benign:       #22c55e;
+  --atk-dos:          #dc2626;
+  --atk-ddos:         #7f1d1d;
+  --atk-portscan:     #ea580c;
+  --atk-bruteforce:   #d97706;
+  --atk-webattack:    #9333ea;
+  --atk-botnet:       #be123c;
+  --atk-heartbleed:   #991b1b;
+  --atk-infiltration: #4c0519;
+  --atk-unknown:      #6b7280;
+
+  /* ─────────────  Borders  ───────────── */
+  --border-1:      #1e293b;                  /* default panel border */
+  --border-2:      #0a1120;                  /* divider on dark */
+  --border-3:      #334155;                  /* inset / chip border */
+  --border-cyan:   rgba(0, 212, 255, 0.30);
+  --border-blue:   rgba(59, 130, 246, 0.30);
+  --border-red:    rgba(220, 38, 38, 0.45);
+  --border-amber:  rgba(255, 180, 0, 0.35);
+
+  /* ─────────────  Glow System (the brand's signature)  ───────────── */
+  --glow-cyan:      0 0 20px rgba(0, 212, 255, 0.50);
+  --glow-cyan-soft: 0 0 8px  rgba(0, 212, 255, 0.40);
+  --glow-blue:      0 0 16px rgba(59, 130, 246, 0.40);
+  --glow-red:       0 0 30px rgba(255,  0, 68, 0.60);
+  --glow-red-hot:   0 0 40px rgba(220, 38, 38, 0.80);
+  --glow-green:     0 0 20px rgba(0, 255, 136, 0.40);
+  --glow-amber:     0 0 16px rgba(255, 180, 0,  0.50);
+
+  /* text-shadows used in neon-text */
+  --neon-cyan: 0 0 7px rgba(0,212,255,0.9), 0 0 14px rgba(0,212,255,0.6), 0 0 30px rgba(0,212,255,0.3);
+  --neon-red:  0 0 7px rgba(255,51,102,0.9),0 0 14px rgba(255,51,102,0.6),0 0 30px rgba(255,51,102,0.3);
+
+  /* ─────────────  Shadows (depth, no color)  ───────────── */
+  --shadow-card:  0 2px 8px rgba(0, 0, 0, 0.30);
+  --shadow-pop:   0 8px 24px rgba(0, 0, 0, 0.60);
+  --shadow-card-glow-blue: 0 0 20px rgba(59,130,246,0.13), 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-card-glow-red:  0 0 20px rgba(220,38,38,0.13),  0 2px 8px rgba(0,0,0,0.3);
+
+  /* ─────────────  Spacing scale  ───────────── */
+  --sp-1:   4px;
+  --sp-2:   6px;
+  --sp-3:   8px;
+  --sp-4:  10px;
+  --sp-5:  12px;
+  --sp-6:  14px;
+  --sp-7:  16px;
+  --sp-8:  20px;
+  --sp-9:  24px;
+  --sp-10: 32px;
+  --sp-11: 48px;
+
+  /* ─────────────  Radius  ───────────── */
+  --r-xs:  4px;     /* tag, micro chip */
+  --r-sm:  6px;     /* small button, severity tag */
+  --r-md:  8px;     /* button, input */
+  --r-lg: 10px;     /* stat card */
+  --r-xl: 12px;     /* large card */
+  --r-2xl:14px;     /* main panel */
+  --r-pill:20px;    /* pill / capsule */
+  --r-full:9999px;
+
+  /* ─────────────  Type  ───────────── */
+  --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', source-code-pro, Menlo, Monaco, Consolas, monospace;
+
+  --fs-9:    9px;
+  --fs-10:  10px;
+  --fs-11:  11px;
+  --fs-12:  12px;
+  --fs-13:  13px;
+  --fs-14:  14px;
+  --fs-16:  16px;
+  --fs-20:  20px;
+  --fs-22:  22px;
+  --fs-24:  24px;
+  --fs-28:  28px;
+
+  --fw-regular: 400;
+  --fw-medium:  500;
+  --fw-semi:    600;
+  --fw-bold:    700;
+  --fw-black:   800;
+
+  --ls-tight: -0.5px;
+  --ls-base:   0;
+  --ls-wide:   0.5px;
+  --ls-wider:  1px;
+  --ls-widest: 1.5px;
+  --ls-caps:   2px;     /* tracked-out caps labels */
+
+  /* ─────────────  Motion  ───────────── */
+  --ease-out:    cubic-bezier(0.4, 0, 0.2, 1);
+  --t-fast:      0.15s;
+  --t-base:      0.20s;
+  --t-slow:      0.25s;
+}
+
+/* =============================================================
+   Semantic typography classes — apply directly
+   ============================================================= */
+body, .ds-body {
+  font-family: var(--font-sans);
+  color: var(--fg-primary);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.ds-h1 {
+  font-size: var(--fs-28);
+  font-weight: var(--fw-black);
+  letter-spacing: var(--ls-tight);
+  color: var(--fg-primary);
+  margin: 0;
+  line-height: 1.1;
+}
+
+.ds-h2 {
+  font-size: var(--fs-20);
+  font-weight: var(--fw-black);
+  letter-spacing: var(--ls-tight);
+  color: var(--fg-primary);
+  margin: 0;
+}
+
+.ds-h3 {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-bold);
+  color: var(--fg-primary);
+  margin: 0;
+}
+
+.ds-stat-value {
+  font-size: var(--fs-28);
+  font-weight: var(--fw-black);
+  letter-spacing: var(--ls-tight);
+  color: var(--fg-primary);
+  line-height: 1.1;
+}
+
+.ds-eyebrow {
+  /* the iconic SOC-style tracked-out caps label */
+  font-size: var(--fs-10);
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-widest);
+  color: var(--fg-faint);
+}
+
+.ds-eyebrow-tight {
+  font-size: var(--fs-11);
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wider);
+  color: var(--fg-soft);
+}
+
+.ds-body-1 {
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+.ds-body-2 {
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+.ds-mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--brand-blue-fg);
+}
+
+.ds-mono-sm {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--fg-soft);
+}
+
+.ds-link {
+  color: var(--brand-blue);
+  text-decoration: none;
+  transition: color var(--t-fast) var(--ease-out);
+}
+.ds-link:hover { color: var(--brand-blue-fg); }
+
+/* =============================================================
+   Effect utilities
+   ============================================================= */
+.ds-neon-cyan {
+  color: var(--brand-cyan);
+  text-shadow: var(--neon-cyan);
+}
+.ds-neon-red {
+  color: var(--hot-red-2);
+  text-shadow: var(--neon-red);
+}
+
+.ds-cyber-grid {
+  background-color: var(--bg-app);
+  background-image:
+    linear-gradient(rgba(59,130,246,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+@keyframes ds-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+.ds-pulse { animation: ds-pulse 1.4s ease-in-out infinite; }

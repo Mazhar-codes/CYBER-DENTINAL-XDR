@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cyber Sentinel XDR — Cinematic Intro</title>
+  <link rel="stylesheet" href="cinematic-v2.css" />
+</head>
+<body>
+  <!-- React mount -->
+  <div id="app"></div>
+  <!-- Tweaks panel mount -->
+  <div id="tweaks-host"></div>
+
+  <!-- React + Babel (no SRI — local dev) -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+  <!-- Show any JS errors on-screen so blank page is self-diagnosing -->
+  <script>
+    window.onerror = function(msg, src, line, col, err) {
+      var d = document.createElement('div');
+      d.style.cssText = 'position:fixed;top:8px;left:8px;right:8px;background:rgba(200,0,0,0.85);color:#fff;padding:12px 16px;font:13px/1.5 monospace;z-index:99999;border-radius:6px;white-space:pre-wrap;';
+      d.textContent = 'XDR Startup Error\n' + msg + '\n(line ' + line + (src ? ', ' + src.split('/').pop() : '') + ')';
+      document.body.appendChild(d);
+    };
+    (function(){
+      var orig = console.error;
+      console.error = function() {
+        var msg = arguments[0];
+        if (typeof msg === 'string' && msg.indexOf('Each child in a list') !== -1) return;
+        return orig.apply(console, arguments);
+      };
+    })();
+  </script>
+
+  <!-- Animation libs -->
+  <script src="https://unpkg.com/framer-motion@11.11.17/dist/framer-motion.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js" crossorigin="anonymous"></script>
+
+  <!-- Three.js + post-processing (UMD/global-namespace builds from r140.2) -->
+  <script src="https://unpkg.com/three@0.140.2/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.140.2/examples/js/shaders/CopyShader.js"></script>
+  <script src="https://unpkg.com/three@0.140.2/examples/js/shaders/LuminosityHighPassShader.js"></script>
+  <script src="https://unpkg.com/three@0.140.2/examples/js/postprocessing/EffectComposer.js"></script>
+  <script src="https://unpkg.com/three@0.140.2/examples/js/postprocessing/RenderPass.js"></script>
+  <script src="https://unpkg.com/three@0.140.2/examples/js/postprocessing/ShaderPass.js"></script>
+  <script src="https://unpkg.com/three@0.140.2/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+  <!-- Canvas FX engine + WebGL stage -->
+  <script src="cinematic-engine.js"></script>
+  <script src="three-stage.js"></script>
+
+  <!-- Tweaks panel components -->
+  <script type="text/babel" data-presets="env,react" src="tweaks-panel.jsx"></script>
+
+  <!-- Main app -->
+  <script type="text/babel" data-presets="env,react" src="cinematic-app.jsx"></script>
+</body>
+</html>

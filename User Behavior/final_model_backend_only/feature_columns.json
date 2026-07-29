@@ -1,0 +1,21 @@
+[
+  "file_ops_count",
+  "file_write_count",
+  "file_read_count",
+  "unique_files_accessed",
+  "file_ops_rate",
+  "logon_count",
+  "logoff_count",
+  "failed_logon_count",
+  "after_hours_activity",
+  "device_connects",
+  "device_disconnects",
+  "device_events",
+  "emails_sent",
+  "unique_recipients",
+  "O",
+  "C",
+  "E",
+  "A",
+  "N"
+]

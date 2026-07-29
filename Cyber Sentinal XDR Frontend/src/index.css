@@ -1,0 +1,139 @@
+@import './theme.css';
+
+/* ─── Design System Tokens ─────────────────────────────────── */
+:root {
+  --card-radius: 10px;
+  --card-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  --card-shadow-hover: 0 4px 20px rgba(0,0,0,0.6);
+  --spacing-xs: 6px;
+  --spacing-sm: 10px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --border-color-dark:  rgba(255,255,255,0.08);
+  --border-color-light: rgba(0,0,0,0.12);
+}
+
+html {
+  font-size: 18px;
+}
+
+/* Responsive font scaling */
+@media (max-width: 1366px) {
+  html { font-size: 16px; }
+}
+@media (min-width: 1920px) {
+  html { font-size: 19px; }
+}
+@media (min-width: 2560px) {
+  html { font-size: 21px; }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-primary, #0a1120);
+  color: var(--text-primary, #f1f5f9);
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+code {
+  font-family: 'Fira Code', 'Cascadia Code', source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ── Smooth scrolling ──────────────────────────────────────── */
+* { scroll-behavior: smooth; }
+
+/* ── Scrollbar (theme-aware via theme.css; duplicate removed) ── */
+/* scrollbar rules are defined in theme.css */
+
+/* ── Generic card utility class ────────────────────────────── */
+.card {
+  background: var(--bg-card, #111827);
+  border: 1px solid var(--border-color, rgba(255,255,255,0.08));
+  border-radius: var(--card-radius, 10px);
+  box-shadow: var(--card-shadow, 0 2px 12px rgba(0,0,0,0.4));
+  transition: box-shadow 0.2s ease, background 0.2s ease;
+}
+.card:hover {
+  box-shadow: var(--card-shadow-hover, 0 4px 20px rgba(0,0,0,0.6));
+  background: var(--bg-card-hover, #1a2235);
+}
+
+/* ── Table row hover ───────────────────────────────────────── */
+table tbody tr:hover {
+  background: var(--table-row-hover, rgba(255,255,255,0.04)) !important;
+  transition: background 0.15s;
+}
+
+/* ── Skeleton loader ───────────────────────────────────────── */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.7; }
+}
+.skeleton { animation: skeleton-pulse 1.6s ease-in-out infinite; background: rgba(99,102,241,0.15); border-radius: 4px; }
+
+/* ── Ripple button ─────────────────────────────────────────── */
+.ripple-btn { position: relative; overflow: hidden; }
+.ripple-btn .ripple-circle { position: absolute; border-radius: 50%; background: rgba(255,255,255,0.25); transform: scale(0); animation: ripple-anim 0.5s linear; pointer-events: none; }
+@keyframes ripple-anim { to { transform: scale(4); opacity: 0; } }
+
+/* ── Input glow focus ──────────────────────────────────────── */
+.xdr-input { transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+.xdr-input:focus { border-color: #6366f1 !important; box-shadow: 0 0 0 3px rgba(99,102,241,0.2), 0 0 12px rgba(99,102,241,0.15) !important; outline: none; }
+
+/* ── Status badge color transitions ───────────────────── */
+.status-badge { transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease; }
+
+/* ── Smooth table row hover ────────────────────────────── */
+.xdr-table-row { transition: background-color 0.15s ease; }
+.xdr-table-row:hover { background: rgba(99,102,241,0.07) !important; }
+
+/* ── Button base transitions ───────────────────────────── */
+.xdr-btn { transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.2s ease, opacity 0.2s ease; }
+.xdr-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(99,102,241,0.3); }
+.xdr-btn:active:not(:disabled) { transform: translateY(0px) scale(0.98); }
+.xdr-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Generic spin (used by inline micro-spinners in buttons) ── */
+@keyframes xdr-spin { to { transform: rotate(360deg); } }
+
+/* ── Dual Orbit Loader ─────────────────────────────────────── */
+@keyframes xdr-orbit-cw  { to { transform: rotate(360deg);  } }
+@keyframes xdr-orbit-ccw { to { transform: rotate(-360deg); } }
+@keyframes xdr-core-pulse {
+  0%, 100% { transform: scale(1);    opacity: 1;    }
+  50%       { transform: scale(1.38); opacity: 0.55; }
+}
+@keyframes xdr-label-blink {
+  0%, 100% { opacity: 0.85; }
+  50%       { opacity: 0.38; }
+}
+
+/* ── Border Draw — SVG stroke animation (triggered by global JS) */
+@keyframes xdr-border-draw-stroke {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes xdr-border-draw-fade {
+  0%, 75% { opacity: 1; }
+  100%    { opacity: 0; }
+}
+
+/* ── Reduced motion ────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ── Smooth sidebar transitions ────────────────────────── */
+.sidebar-item { transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease; }

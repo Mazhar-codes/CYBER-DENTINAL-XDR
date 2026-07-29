@@ -1,0 +1,265 @@
+/* Cyber Sentinel XDR — Global styles */
+/* Theme transitions are handled in theme.css */
+
+:root {
+  --color-bg: #050b18;
+  --color-bg-card: rgba(0, 20, 40, 0.85);
+  --color-primary: #00d4ff;
+  --color-success: #00ff88;
+  --color-warning: #ffaa00;
+  --color-danger: #ff3366;
+  --color-critical: #ff0044;
+  --color-border: rgba(0, 212, 255, 0.3);
+  --color-text: #e0f4ff;
+  --color-text-muted: #6b8fa3;
+  --glow-cyan: 0 0 20px rgba(0, 212, 255, 0.5);
+  --glow-red: 0 0 30px rgba(255, 0, 68, 0.6);
+  --glow-green: 0 0 20px rgba(0, 255, 136, 0.4);
+}
+
+/* ── Custom scrollbar ──────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #050b18;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 212, 255, 0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 212, 255, 0.5);
+}
+
+/* ── Utility: neon text ────────────────────────────────────────────────────── */
+.neon-text {
+  color: #00d4ff;
+  text-shadow:
+    0 0 7px rgba(0, 212, 255, 0.9),
+    0 0 14px rgba(0, 212, 255, 0.6),
+    0 0 30px rgba(0, 212, 255, 0.3);
+}
+
+.neon-text-red {
+  color: #ff3366;
+  text-shadow:
+    0 0 7px rgba(255, 51, 102, 0.9),
+    0 0 14px rgba(255, 51, 102, 0.6),
+    0 0 30px rgba(255, 51, 102, 0.3);
+}
+
+/* ── Scan line animation ───────────────────────────────────────────────────── */
+.scan-line-container {
+  position: relative;
+  overflow: hidden;
+}
+
+.scan-line-container::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 212, 255, 0.8) 50%,
+    transparent 100%
+  );
+  animation: scan-line 3s ease-in-out infinite;
+  z-index: 10;
+  pointer-events: none;
+}
+
+@keyframes scan-line {
+  0%   { top: -2px; opacity: 0; }
+  5%   { opacity: 1; }
+  95%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+/* ── Pulse border — neon flicker for alerts ───────────────────────────────── */
+@keyframes pulse-border {
+  0%, 100% {
+    border-color: rgba(255, 0, 68, 0.4);
+    box-shadow: 0 0 6px rgba(255, 0, 68, 0.2);
+  }
+  50% {
+    border-color: rgba(255, 0, 68, 1);
+    box-shadow: 0 0 20px rgba(255, 0, 68, 0.7), inset 0 0 10px rgba(255, 0, 68, 0.1);
+  }
+}
+
+/* ── Glow pulse — for critical alert rows ─────────────────────────────────── */
+@keyframes glow-pulse {
+  0%, 100% {
+    background-color: rgba(255, 0, 68, 0.04);
+  }
+  50% {
+    background-color: rgba(255, 0, 68, 0.1);
+  }
+}
+
+/* ── Neon border flicker utility class ───────────────────────────────────── */
+.alert-critical-pulse {
+  animation: pulse-border 1.5s ease-in-out infinite, glow-pulse 2s ease-in-out infinite;
+  border: 1px solid rgba(255, 0, 68, 0.4) !important;
+}
+
+.alert-high-pulse {
+  animation: pulse-border 2s ease-in-out infinite;
+  border: 1px solid rgba(255, 51, 102, 0.3) !important;
+  border-color: rgba(255, 100, 50, 0.4);
+}
+
+/* ── Vignette overlay animation ───────────────────────────────────────────── */
+@keyframes vignette-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%       { opacity: 0.65; }
+}
+
+/* ── Siren notification slide ─────────────────────────────────────────────── */
+@keyframes slide-down {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ── OTP input glow ───────────────────────────────────────────────────────── */
+@keyframes otp-glow {
+  0%, 100% { box-shadow: 0 0 4px rgba(0, 212, 255, 0.3); }
+  50%       { box-shadow: 0 0 16px rgba(0, 212, 255, 0.8); }
+}
+
+/* ── Particle grid background animation ───────────────────────────────────── */
+@keyframes bg-shift {
+  0%   { background-position: 0 0; }
+  100% { background-position: 40px 40px; }
+}
+
+.cyber-grid-bg {
+  background-image:
+    linear-gradient(rgba(0, 212, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 255, 0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+  animation: bg-shift 8s linear infinite;
+}
+
+/* ── Button glow on hover ─────────────────────────────────────────────────── */
+.cyber-btn {
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.cyber-btn:hover:not(:disabled) {
+  filter: brightness(1.15);
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
+}
+
+.cyber-btn-danger:hover:not(:disabled) {
+  box-shadow: 0 0 20px rgba(255, 0, 68, 0.5);
+}
+
+/* ── Floating particles ───────────────────────────────────────────────────── */
+@keyframes float-up {
+  0%   { transform: translateY(0) translateX(0); opacity: 0.6; }
+  100% { transform: translateY(-120px) translateX(20px); opacity: 0; }
+}
+
+/* ── Auth card entrance ───────────────────────────────────────────────────── */
+@keyframes card-entrance {
+  from {
+    transform: translateY(40px) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* ── Password strength bar fill ───────────────────────────────────────────── */
+@keyframes strength-fill {
+  from { width: 0%; }
+  to   { width: var(--target-width, 50%); }
+}
+
+/* ── Field error shake ────────────────────────────────────────────────────── */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-8px); }
+  40%       { transform: translateX(8px); }
+  60%       { transform: translateX(-4px); }
+  80%       { transform: translateX(4px); }
+}
+
+.field-error {
+  animation: shake 0.4s ease;
+}
+
+/* ── Audit log entry ──────────────────────────────────────────────────────── */
+@keyframes slide-in-right {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* ── Unauthorized access — glitch & red flash animations ─────────────────── */
+@keyframes glitch {
+  0%   { transform: translate(0); }
+  20%  { transform: translate(-3px, 1px); filter: hue-rotate(90deg); }
+  40%  { transform: translate(3px, -1px); }
+  60%  { transform: translate(-1px, 2px); filter: hue-rotate(180deg); }
+  80%  { transform: translate(1px, -2px); }
+  100% { transform: translate(0); filter: hue-rotate(0deg); }
+}
+
+@keyframes redFlash {
+  0%, 100% { box-shadow: none; }
+  50%       { box-shadow: 0 0 30px rgba(255, 0, 0, 0.8), inset 0 0 30px rgba(255, 0, 0, 0.3); }
+}
+
+.unauthorized-glitch {
+  animation: glitch 0.15s infinite, redFlash 0.5s ease-in-out 3;
+}
+
+/* ── Unauthorized banner slide in/out ─────────────────────────────────────── */
+@keyframes banner-slide-in {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+@keyframes banner-fade-out {
+  0%   { opacity: 1; transform: translateY(0); }
+  80%  { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-20px); }
+}
+
+/* ── Role-denied access animation ─────────────────────────────────────────── */
+@keyframes access-denied-pulse {
+  0%, 100% {
+    border-color: rgba(255, 0, 68, 0.4);
+    box-shadow: 0 0 10px rgba(255, 0, 68, 0.2);
+  }
+  50% {
+    border-color: rgba(255, 0, 68, 1);
+    box-shadow: 0 0 40px rgba(255, 0, 68, 0.8), inset 0 0 20px rgba(255, 0, 68, 0.15);
+  }
+}
+
+@keyframes access-denied-text-glitch {
+  0%   { letter-spacing: 4px; opacity: 1; }
+  25%  { letter-spacing: 8px; opacity: 0.7; color: #ff0044; }
+  50%  { letter-spacing: 2px; opacity: 1; color: #ff3366; }
+  75%  { letter-spacing: 6px; opacity: 0.8; }
+  100% { letter-spacing: 4px; opacity: 1; }
+}
+
+.access-denied-animate {
+  animation: access-denied-pulse 0.4s ease-in-out infinite;
+}
+
+.access-denied-text {
+  animation: access-denied-text-glitch 0.3s ease-in-out infinite;
+}
