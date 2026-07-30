@@ -35,7 +35,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -45,7 +45,7 @@ os.environ.setdefault("USER_LOG_DIR", r"C:\winlogbeat\logs")
 os.environ.setdefault("USER_MODEL_DIR", str(Path(__file__).parent.parent / "User Behavior" / "final_model_backend_only"))
 
 from agents.network_detection_agent import NetworkDetectionAgent
-from agents.user_behavior_agent import UserBehaviorAgent
+from agents.user_behavior_agent import UserBehaviorAgent, _DEFAULT_RULES as _DEFAULT_USER_RULES
 from agents.fusion_engine_agent import FusionEngineAgent
 from agents.shap_agent import SHAPAgent
 from agents.malware_analysis_agent import MalwareAnalysisAgent
@@ -1182,6 +1182,13 @@ async def _do_startup():
             interval_seconds=settings.user_behavior_interval_seconds,
             on_result=_handle_user_result,
         )
+        # Apply any admin-saved User Behavior ruleset so the first cycle uses it.
+        try:
+            global _user_behavior_rules
+            _user_behavior_rules = await asyncio.to_thread(_load_user_rules_from_db)
+            _user_agent.apply_rules(_user_behavior_rules)
+        except Exception as _ur_exc:
+            logger.warning(f"[startup] Could not apply persisted user rules: {_ur_exc}")
         await _user_agent.start()
         logger.info("UserBehaviorAgent started")
     except Exception as e:
@@ -8646,6 +8653,69 @@ class ThresholdSettings(BaseModel):
     auto_response_enabled:     bool  = Field(default=True)
 
 
+# ---------------------------------------------------------------------------
+# User Behavior Rules — admin-configurable heuristic ruleset for the user model.
+# Defaults come from the agent (single source of truth: _DEFAULT_USER_RULES).
+# Persisted in `settings` collection (key="user_behavior_rules") and pushed into
+# the live UserBehaviorAgent via apply_rules().
+# ---------------------------------------------------------------------------
+class UserBehaviorRules(BaseModel):
+    enabled:                   bool  = Field(default=True)
+    business_hours_start:      int   = Field(default=6,  ge=0, le=23)
+    business_hours_end:        int   = Field(default=23, ge=1, le=24)
+    flag_weekends:             bool  = Field(default=False)
+    after_hours_weight:        float = Field(default=0.0,  ge=0.0, le=1.0)
+    max_concurrent_sessions:   int   = Field(default=3,  ge=1, le=50)
+    excess_sessions_weight:    float = Field(default=0.30, ge=0.0, le=1.0)
+    max_remote_sessions:       int   = Field(default=2,  ge=0, le=50)
+    remote_after_hours_weight: float = Field(default=0.50, ge=0.0, le=1.0)
+    system_account_weight:     float = Field(default=0.60, ge=0.0, le=1.0)
+    rule_anomaly_threshold:    float = Field(default=0.70, ge=0.10, le=1.0)
+    watch_accounts:            list  = Field(default_factory=list)
+
+    @validator("business_hours_end")
+    def _end_after_start(cls, v, values):  # noqa: N805
+        start = values.get("business_hours_start", 6)
+        if v <= start:
+            raise ValueError("business_hours_end must be greater than business_hours_start")
+        return v
+
+    @validator("watch_accounts")
+    def _clean_accounts(cls, v):  # noqa: N805
+        if not isinstance(v, list):
+            return []
+        # de-dup, strip, drop blanks, cap at 50 entries
+        seen, out = set(), []
+        for a in v:
+            s = str(a).strip()
+            key = s.lower()
+            if s and key not in seen:
+                seen.add(key)
+                out.append(s)
+        return out[:50]
+
+
+# Live copy of the ruleset (mirrors what the agent is using); refreshed on
+# startup and on every POST /settings/user-rules.
+_user_behavior_rules: dict = dict(_DEFAULT_USER_RULES)
+
+
+def _load_user_rules_from_db() -> dict:
+    """Read the user-behavior ruleset from MongoDB, merged over agent defaults."""
+    if not MONGO_OK or _db is None:
+        return dict(_DEFAULT_USER_RULES)
+    try:
+        doc = _db["settings"].find_one({"key": "user_behavior_rules"}, {"_id": 0})
+        if doc:
+            merged = dict(_DEFAULT_USER_RULES)
+            merged.update({k: v for k, v in doc.items()
+                           if k in _DEFAULT_USER_RULES and v is not None})
+            return merged
+    except Exception as exc:
+        logger.debug(f"[SETTINGS] user rules load failed: {exc}")
+    return dict(_DEFAULT_USER_RULES)
+
+
 def _load_thresholds_from_db() -> dict:
     """Read the current thresholds document from MongoDB, falling back to defaults."""
     if not MONGO_OK or _db is None:
@@ -8785,6 +8855,62 @@ async def update_thresholds(
         },
         "message": "Thresholds updated and applied in-memory",
     }
+
+
+@app.get("/settings/user-rules", dependencies=[Depends(_require_key_or_jwt)])
+async def get_user_rules():
+    """Return the current User Behavior ruleset (defaults if none saved).
+    Auth: valid API key OR any JWT (any role) — viewers may read but not edit."""
+    rules = await asyncio.to_thread(_load_user_rules_from_db)
+    return {"status": "ok", "rules": rules, "defaults": dict(_DEFAULT_USER_RULES), "mongo_ok": MONGO_OK}
+
+
+@app.post("/settings/user-rules")
+async def update_user_rules(
+    request: Request,
+    body: UserBehaviorRules,
+    credentials: str = Depends(_require_admin_jwt),
+):
+    """Update the User Behavior heuristic ruleset. Admin JWT (or API key) required.
+    Persists to the `settings` collection and pushes the rules into the live
+    UserBehaviorAgent immediately (no restart needed)."""
+    rules_doc = {"key": "user_behavior_rules", **body.dict(), "updated_at": _now()}
+
+    if MONGO_OK and _db is not None:
+        try:
+            await asyncio.to_thread(
+                lambda: _db["settings"].update_one(
+                    {"key": "user_behavior_rules"}, {"$set": rules_doc}, upsert=True,
+                )
+            )
+        except Exception as exc:
+            logger.error(f"[SETTINGS] user rules upsert failed: {exc}")
+
+    # Apply in-memory to the live agent immediately.
+    global _user_behavior_rules
+    _user_behavior_rules = body.dict()
+    if _user_agent is not None:
+        try:
+            _user_agent.apply_rules(_user_behavior_rules)
+        except Exception as exc:
+            logger.error(f"[SETTINGS] apply_rules failed: {exc}")
+
+    username = _jwt_sub_from_request(request) or "api_key"
+    _client_ip = request.client.host if request.client else "unknown"
+    _detail = (
+        f"enabled={body.enabled} hours={body.business_hours_start}-{body.business_hours_end} "
+        f"weekends={body.flag_weekends} max_sessions={body.max_concurrent_sessions} "
+        f"max_remote={body.max_remote_sessions} rule_threshold={body.rule_anomaly_threshold} "
+        f"watch={len(body.watch_accounts)}"
+    )
+    await sio.emit("audit_event", {
+        "user": username, "user_id": username, "action": "user_rules_updated",
+        "ip": _client_ip, "timestamp": _now(), "status": "success",
+        "details": _detail, "detail": _detail,
+    })
+    logger.info("[SETTINGS] User Behavior rules saved by user=%s: %s", username, _detail)
+
+    return {"status": "ok", "rules": body.dict(), "message": "User Behavior rules updated and applied in-memory"}
 
 
 # ---------------------------------------------------------------------------

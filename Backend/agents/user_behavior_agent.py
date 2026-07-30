@@ -10,7 +10,7 @@ import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -47,6 +47,39 @@ _WINLOGBEAT_LOG_DIR = Path(_os.getenv("USER_LOG_DIR", r"C:\XDR_Logs"))
 # Staleness threshold in seconds: if no Winlogbeat file has been modified within
 # this window the agent falls back to PowerShell Get-WinEvent.
 _WINLOGBEAT_STALE_SECONDS = 300
+
+# ---------------------------------------------------------------------------
+# Admin-configurable User Behavior ruleset.
+# These defaults REPRODUCE the original hardcoded heuristic exactly, so shipping
+# this feature changes nothing until an admin edits the rules from Settings.
+# Persisted in MongoDB `settings` (key="user_behavior_rules") and pushed into the
+# live agent via apply_rules() by backend.py. See POST /settings/user-rules.
+#   business_hours_start/end : a logon at hour < start OR >= end counts as
+#                              "after hours" (24-hour clock).
+#   flag_weekends            : also treat Sat/Sun logons as after-hours.
+#   after_hours_weight       : score added when ANY after-hours logon is seen
+#                              (0.0 = original behavior: after-hours alone scores
+#                              nothing and only matters combined with remote).
+#   max_concurrent_sessions  : sessions strictly above this = "excess" (full
+#                              weight); exactly this many = half weight.
+#   max_remote_sessions      : remote sessions strictly above this (with no
+#                              after-hours signal) = "excess remote".
+#   watch_accounts           : extra usernames to treat like a system account.
+# ---------------------------------------------------------------------------
+_DEFAULT_RULES: Dict[str, Any] = {
+    "enabled":                    True,   # False => ignore stored values, use these defaults
+    "business_hours_start":       6,      # logon before 06:00 = after hours
+    "business_hours_end":         23,     # logon at/after 23:00 = after hours
+    "flag_weekends":              False,
+    "after_hours_weight":         0.0,    # standalone after-hours score (0 = legacy)
+    "max_concurrent_sessions":    3,      # >3 sessions = excess
+    "excess_sessions_weight":     0.30,
+    "max_remote_sessions":        2,      # >2 remote (no after-hours) = excess remote
+    "remote_after_hours_weight":  0.50,
+    "system_account_weight":      0.60,
+    "rule_anomaly_threshold":     0.70,
+    "watch_accounts":             [],     # additional usernames flagged like SYSTEM
+}
 
 try:
     from xdr_runtime import (
@@ -115,6 +148,28 @@ class UserBehaviorAgent:
         self.lookback_minutes = lookback_minutes
         self.usb_override_threshold = usb_override_threshold
         self.on_result = on_result
+        # Admin-configurable ruleset (see _DEFAULT_RULES). Overridden at runtime
+        # via apply_rules() from backend.py POST /settings/user-rules.
+        self._rules: Dict[str, Any] = dict(_DEFAULT_RULES)
+
+    def apply_rules(self, rules: Optional[dict]) -> None:
+        """Merge an admin-supplied ruleset over the defaults. Unknown keys are
+        ignored; missing keys keep their default so partial updates are safe."""
+        if not isinstance(rules, dict):
+            return
+        merged = dict(_DEFAULT_RULES)
+        for k, v in rules.items():
+            if k in _DEFAULT_RULES and v is not None:
+                merged[k] = v
+        self._rules = merged
+        logger.info(
+            "UserBehaviorAgent rules applied: enabled=%s hours=%s-%s weekends=%s "
+            "max_sessions=%s max_remote=%s rule_threshold=%s watch=%d",
+            merged["enabled"], merged["business_hours_start"], merged["business_hours_end"],
+            merged["flag_weekends"], merged["max_concurrent_sessions"],
+            merged["max_remote_sessions"], merged["rule_anomaly_threshold"],
+            len(merged["watch_accounts"]),
+        )
 
         self._task: Optional[asyncio.Task] = None
         self._running = False
@@ -516,41 +571,65 @@ class UserBehaviorAgent:
             # Rule path
             # ------------------------------------------------------------------
 
-            # Factor 1 — system account with interactive session
-            # SYSTEM / NT AUTHORITY\SYSTEM / LOCAL SERVICE / NETWORK SERVICE
-            # must not appear in interactive psutil.users() output.
+            # Load the active ruleset. When custom rules are disabled we fall
+            # back to the compiled defaults, exactly reproducing legacy behavior.
+            r = self._rules if self._rules.get("enabled", True) else _DEFAULT_RULES
+            bh_start   = int(r.get("business_hours_start", 6))
+            bh_end     = int(r.get("business_hours_end", 23))
+            flag_wknd  = bool(r.get("flag_weekends", False))
+            ah_weight  = float(r.get("after_hours_weight", 0.0))
+            max_sess   = int(r.get("max_concurrent_sessions", 3))
+            excess_w   = float(r.get("excess_sessions_weight", 0.30))
+            max_remote = int(r.get("max_remote_sessions", 2))
+            remote_w   = float(r.get("remote_after_hours_weight", 0.50))
+            sys_w      = float(r.get("system_account_weight", 0.60))
+            watch      = {str(a).strip().lower() for a in r.get("watch_accounts", []) if str(a).strip()}
+
+            def _is_after_hours(dt) -> bool:
+                if flag_wknd and dt.weekday() >= 5:  # Sat=5, Sun=6
+                    return True
+                return dt.hour < bh_start or dt.hour >= bh_end
+
+            # Factor 1 — system account (or admin watch-listed account) with an
+            # interactive session. SYSTEM / LOCAL SERVICE etc. must not appear in
+            # interactive psutil.users() output.
             _SYSTEM_ACCOUNTS = {
                 "system",
                 "nt authority\\system",
                 "local service",
                 "network service",
             }
-            if current_user.strip().lower() in _SYSTEM_ACCOUNTS:
-                rule_score += 0.60
+            if current_user.strip().lower() in (_SYSTEM_ACCOUNTS | watch):
+                rule_score += sys_w
                 flags.append("system_account_session")
 
-            # Factor 2 — excessive concurrent sessions
-            if session_count >= 4:
-                rule_score += 0.30
+            # Factor 2 — excessive concurrent sessions (> max = full weight,
+            # exactly max = half weight — a soft warning band).
+            if session_count > max_sess:
+                rule_score += excess_w
                 flags.append("excess_sessions")
-            elif session_count == 3:
-                rule_score += 0.15
+            elif session_count == max_sess:
+                rule_score += excess_w / 2.0
 
-            # Factor 3 — unusual hours window (before 05:00 or at/after 23:00)
+            # Factor 3 — configurable after-hours window (single window drives
+            # both the compound rule below and the model's after_hours feature).
             for session in sessions:
                 started = session.get("started", "")
                 if not started:
                     continue
                 try:
                     dt = datetime.strptime(str(started), "%Y-%m-%d %H:%M:%S")
-                    if dt.hour < 5 or dt.hour >= 23:
+                    if _is_after_hours(dt):
                         unusual_hours_detected = True
-                    # after_hours_count uses a wider window (< 06:00 or >= 23:00)
-                    # consistent with the model's after_hours_activity feature
-                    if dt.hour < 6 or dt.hour >= 23:
                         after_hours_count += 1
                 except (ValueError, TypeError):
                     pass
+
+            # Standalone after-hours contribution (0 by default; admins raise it
+            # to make off-hours logons meaningful on their own).
+            if after_hours_count > 0 and ah_weight > 0.0:
+                rule_score += ah_weight
+                flags.append("after_hours_logon")
 
             # Factor 4 — remote IP session counting
             # A single remote session during business hours contributes nothing.
@@ -563,15 +642,15 @@ class UserBehaviorAgent:
                 if "." in host and all(c.isdigit() or c == "." for c in host):
                     remote_session_count += 1
 
-            # Factor 5 — compound: remote sessions + unusual hours
+            # Factor 5 — compound: remote sessions + after-hours
             if remote_session_count >= 2 and unusual_hours_detected:
-                rule_score += 0.50
+                rule_score += remote_w
                 flags.append("multiple_remote_after_hours")
             elif remote_session_count >= 1 and unusual_hours_detected:
-                rule_score += 0.30
+                rule_score += remote_w * 0.6
                 flags.append("remote_after_hours")
-            elif remote_session_count >= 3 and not unusual_hours_detected:
-                rule_score += 0.30
+            elif remote_session_count > max_remote and not unusual_hours_detected:
+                rule_score += excess_w
                 flags.append("excess_remote_sessions")
             # single remote session during business hours → zero contribution
 
@@ -636,12 +715,13 @@ class UserBehaviorAgent:
             # ------------------------------------------------------------------
             final_score: float = max(rule_score, model_score)
 
-            # Anomaly decision uses the model threshold when available;
-            # falls back to the rule threshold of 0.70 otherwise.
+            # Anomaly decision uses the model threshold when available; falls
+            # back to the admin-configurable rule threshold (default 0.70).
+            rule_thr = float(r.get("rule_anomaly_threshold", 0.70))
             if model_used:
-                anomaly_threshold = max(self.__class__._model_threshold, 0.70)
+                anomaly_threshold = max(self.__class__._model_threshold, rule_thr)
             else:
-                anomaly_threshold = 0.70
+                anomaly_threshold = rule_thr
             anomaly: bool = final_score >= anomaly_threshold
 
             logger.debug(

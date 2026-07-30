@@ -284,6 +284,106 @@ function SliderRow({
   );
 }
 
+// ── Integer input row (logon hours, session counts) ──────────────────────────
+function IntRow({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+  accent,
+  disabled,
+  sub,
+  suffix,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+  accent: string;
+  disabled?: boolean;
+  sub?: string;
+  suffix?: string;
+}) {
+  return (
+    <div
+      style={{
+        padding: "12px 0",
+        borderBottom: "1px solid var(--border-color)",
+        opacity: disabled ? 0.5 : 1,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 16,
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>{label}</div>
+        {sub && <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>{sub}</div>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+        <input
+          type="number"
+          min={min}
+          max={max}
+          value={value}
+          disabled={disabled}
+          onChange={(e) => {
+            const n = parseInt(e.target.value, 10);
+            if (!isNaN(n)) onChange(Math.max(min, Math.min(max, n)));
+          }}
+          style={{
+            width: 68,
+            padding: "7px 10px",
+            borderRadius: 8,
+            border: "1px solid var(--border-color)",
+            background: "var(--bg-primary)",
+            color: accent,
+            fontWeight: 700,
+            fontFamily: "'Fira Code', monospace",
+            fontSize: 13,
+            textAlign: "center",
+            cursor: disabled ? "not-allowed" : "text",
+          }}
+        />
+        {suffix && <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{suffix}</span>}
+      </div>
+    </div>
+  );
+}
+
+// User Behavior ruleset — mirrors backend UserBehaviorRules Pydantic model.
+interface UBRules {
+  enabled: boolean;
+  business_hours_start: number;
+  business_hours_end: number;
+  flag_weekends: boolean;
+  after_hours_weight: number;
+  max_concurrent_sessions: number;
+  excess_sessions_weight: number;
+  max_remote_sessions: number;
+  remote_after_hours_weight: number;
+  system_account_weight: number;
+  rule_anomaly_threshold: number;
+  watch_accounts: string[];
+}
+
+const UB_DEFAULTS: UBRules = {
+  enabled: true,
+  business_hours_start: 6,
+  business_hours_end: 23,
+  flag_weekends: false,
+  after_hours_weight: 0.0,
+  max_concurrent_sessions: 3,
+  excess_sessions_weight: 0.3,
+  max_remote_sessions: 2,
+  remote_after_hours_weight: 0.5,
+  system_account_weight: 0.6,
+  rule_anomaly_threshold: 0.7,
+  watch_accounts: [],
+};
+
 // ── Integration status card ───────────────────────────────────────────────────
 interface HealthData {
   monitoring?: boolean;
@@ -541,6 +641,53 @@ function SettingsContent({
       setTimeout(() => setThresholdMsg(null), 4000);
     }
   }, [thresholds, autoResponse]);
+
+  // ── F. User Behavior Rules (admin editable; analyst read-only) ───────────────
+  const [ubRules, setUbRules] = useState<UBRules>(UB_DEFAULTS);
+  const [ubWatchText, setUbWatchText] = useState("");
+  const [ubMsg, setUbMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [ubLoading, setUbLoading] = useState(false);
+
+  // Hydrate from backend on mount (admin + analyst both read; only admin saves).
+  useEffect(() => {
+    authAxios
+      .get(`${BACKEND_URL}/settings/user-rules`)
+      .then((res) => {
+        const r = res.data?.rules;
+        if (!r) return;
+        const merged = { ...UB_DEFAULTS, ...r } as UBRules;
+        setUbRules(merged);
+        setUbWatchText((merged.watch_accounts ?? []).join(", "));
+      })
+      .catch(() => {
+        /* fall back to defaults if endpoint unavailable */
+      });
+  }, []);
+
+  const setUb = useCallback(<K extends keyof UBRules>(key: K, value: UBRules[K]) => {
+    setUbRules((r) => ({ ...r, [key]: value }));
+  }, []);
+
+  const handleApplyUserRules = useCallback(async () => {
+    setUbLoading(true);
+    const accounts = ubWatchText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    try {
+      await authAxios.post(`${BACKEND_URL}/settings/user-rules`, {
+        ...ubRules,
+        watch_accounts: accounts,
+      });
+      setUbRules((r) => ({ ...r, watch_accounts: accounts }));
+      setUbMsg({ type: "success", text: "User behavior rules applied and live — no restart needed." });
+    } catch {
+      setUbMsg({ type: "error", text: "Failed to apply rules. Admin privileges required, or check business hours (end must exceed start)." });
+    } finally {
+      setUbLoading(false);
+      setTimeout(() => setUbMsg(null), 4500);
+    }
+  }, [ubRules, ubWatchText]);
 
   // ── E. Alert Settings ────────────────────────────────────────────────────────
   const [minSeverity, setMinSeverity] = useState(
@@ -1127,6 +1274,244 @@ function SettingsContent({
         {autoResponse && (
           <div style={{ marginTop: 8, padding: "8px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.2)", fontSize: 13, color: "#fca5a5" }}>
             <span style={{ fontWeight: 600 }}>Active:</span> SOAR actions will execute automatically. You will receive a toast notification and the incident report will be auto-downloaded when a HIGH/CRITICAL threat is detected.
+          </div>
+        )}
+      </AccordionSection>
+
+      {/* F. User Behavior Rules */}
+      <AccordionSection title="User Behavior Rules" accent="#06b6d4" icon="◈">
+        {!isAdmin && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 14px",
+              borderRadius: 8,
+              background: "rgba(6,182,212,0.07)",
+              border: "1px solid rgba(6,182,212,0.2)",
+              marginBottom: 16,
+              fontSize: 12,
+              color: "#06b6d4",
+              fontWeight: 600,
+            }}
+          >
+            <span>🔒</span>
+            Read-only — Admin privileges required to edit detection rules.
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8, lineHeight: 1.5 }}>
+          Tune the heuristic ruleset for the User Behavior model — logon-hour windows, session
+          limits, and rule weights a SOC analyst can shape to their environment. Changes apply
+          live to the running detector. These rules run alongside the ML model; the higher of the
+          two scores wins.
+        </div>
+
+        {/* Master toggle */}
+        <Toggle
+          value={ubRules.enabled}
+          onChange={(v) => setUb("enabled", v)}
+          label="Enable Custom Rules"
+          sub="When off, the system uses the built-in default heuristic (business hours 06:00–23:00)."
+          accent="#06b6d4"
+        />
+
+        {(() => {
+          const subDisabled = !isAdmin || !ubRules.enabled;
+          return (
+            <>
+              {/* Logon-hour window */}
+              <div style={{ ...SECTION_LABEL, display: "block", margin: "16px 0 4px" }}>
+                Logon Hours (after-hours window)
+              </div>
+              <IntRow
+                label="Business Hours Start"
+                value={ubRules.business_hours_start}
+                min={0}
+                max={23}
+                onChange={(v) => setUb("business_hours_start", v)}
+                accent="#06b6d4"
+                disabled={subDisabled}
+                suffix=":00"
+                sub="A logon before this hour counts as after-hours"
+              />
+              <IntRow
+                label="Business Hours End"
+                value={ubRules.business_hours_end}
+                min={1}
+                max={24}
+                onChange={(v) => setUb("business_hours_end", v)}
+                accent="#06b6d4"
+                disabled={subDisabled}
+                suffix=":00"
+                sub="A logon at/after this hour counts as after-hours (must exceed start)"
+              />
+              <Toggle
+                value={ubRules.flag_weekends}
+                onChange={(v) => setUb("flag_weekends", v)}
+                label="Flag Weekend Logons"
+                sub="Treat any Saturday/Sunday logon as after-hours activity"
+                accent="#06b6d4"
+              />
+              <SliderRow
+                label="After-Hours Logon Weight"
+                value={ubRules.after_hours_weight}
+                min={0}
+                max={1}
+                step={0.05}
+                onChange={(v) => setUb("after_hours_weight", v)}
+                accent="#06b6d4"
+                disabled={subDisabled}
+              />
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: -8, paddingBottom: 4 }}>
+                Score added when an after-hours logon is seen (0 = off-hours alone won't flag)
+              </div>
+
+              {/* Session limits */}
+              <div style={{ ...SECTION_LABEL, display: "block", margin: "16px 0 4px" }}>
+                Session Limits
+              </div>
+              <IntRow
+                label="Max Concurrent Sessions"
+                value={ubRules.max_concurrent_sessions}
+                min={1}
+                max={50}
+                onChange={(v) => setUb("max_concurrent_sessions", v)}
+                accent="#06b6d4"
+                disabled={subDisabled}
+                sub="More simultaneous sessions than this = flagged as excessive"
+              />
+              <IntRow
+                label="Max Remote Sessions"
+                value={ubRules.max_remote_sessions}
+                min={0}
+                max={50}
+                onChange={(v) => setUb("max_remote_sessions", v)}
+                accent="#06b6d4"
+                disabled={subDisabled}
+                sub="More remote-IP sessions than this (during business hours) = flagged"
+              />
+
+              {/* Rule weights */}
+              <div style={{ ...SECTION_LABEL, display: "block", margin: "16px 0 4px" }}>
+                Rule Weights & Sensitivity
+              </div>
+              <SliderRow
+                label="System / Watch-list Account Weight"
+                value={ubRules.system_account_weight}
+                min={0}
+                max={1}
+                step={0.05}
+                onChange={(v) => setUb("system_account_weight", v)}
+                accent="#06b6d4"
+                disabled={subDisabled}
+              />
+              <SliderRow
+                label="Remote + After-Hours Weight"
+                value={ubRules.remote_after_hours_weight}
+                min={0}
+                max={1}
+                step={0.05}
+                onChange={(v) => setUb("remote_after_hours_weight", v)}
+                accent="#06b6d4"
+                disabled={subDisabled}
+              />
+              <SliderRow
+                label="Rule Anomaly Threshold"
+                value={ubRules.rule_anomaly_threshold}
+                min={0.1}
+                max={1}
+                step={0.05}
+                onChange={(v) => setUb("rule_anomaly_threshold", v)}
+                accent="#06b6d4"
+                disabled={subDisabled}
+              />
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: -8, paddingBottom: 4 }}>
+                Rule score at/above this flags the session as anomalous (lower = more sensitive)
+              </div>
+
+              {/* Watch-list accounts */}
+              <div style={{ ...SECTION_LABEL, display: "block", margin: "16px 0 6px" }}>
+                Watch-list Accounts
+              </div>
+              <input
+                type="text"
+                value={ubWatchText}
+                disabled={subDisabled}
+                onChange={(e) => setUbWatchText(e.target.value)}
+                placeholder="e.g. svc_backup, contractor1, admin_temp"
+                style={{
+                  width: "100%",
+                  padding: "9px 12px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-primary)",
+                  color: "var(--text-primary)",
+                  fontSize: 13,
+                  boxSizing: "border-box",
+                  outline: "none",
+                  opacity: subDisabled ? 0.5 : 1,
+                }}
+              />
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 6 }}>
+                Comma-separated usernames treated like a system account (any interactive logon is
+                weighted). Built-in accounts (SYSTEM, LOCAL SERVICE, …) are always watched.
+              </div>
+            </>
+          );
+        })()}
+
+        {isAdmin && (
+          <div style={{ marginTop: 18, display: "flex", alignItems: "center", gap: 12 }}>
+            <button
+              onClick={handleApplyUserRules}
+              disabled={ubLoading}
+              style={{
+                padding: "9px 22px",
+                borderRadius: 8,
+                border: "none",
+                background: ubLoading ? "var(--bg-card)" : "linear-gradient(135deg, #06b6d4, #0891b2)",
+                color: ubLoading ? "var(--text-muted)" : "#000",
+                fontSize: 12,
+                fontWeight: 800,
+                cursor: ubLoading ? "not-allowed" : "pointer",
+                letterSpacing: 0.5,
+              }}
+            >
+              {ubLoading ? "Applying..." : "Apply Rules"}
+            </button>
+            <button
+              onClick={() => {
+                setUbRules(UB_DEFAULTS);
+                setUbWatchText("");
+              }}
+              disabled={ubLoading}
+              style={{
+                padding: "9px 18px",
+                borderRadius: 8,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-primary)",
+                color: "var(--text-muted)",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+                letterSpacing: 0.5,
+              }}
+            >
+              Reset to Defaults
+            </button>
+            {ubMsg && (
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: ubMsg.type === "success" ? "#22c55e" : "#ef4444",
+                }}
+              >
+                {ubMsg.text}
+              </span>
+            )}
           </div>
         )}
       </AccordionSection>
