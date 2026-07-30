@@ -19,6 +19,21 @@ import ResponseModal from "../ResponseModal";
 import { getAccessToken } from "../../services/authService";
 import { BACKEND_URL } from "../../config";
 
+// Decoy-port honeypot hit (locally declared to avoid a circular import with
+// NetworkMonitor; shape matches the honeypot_alert Socket.IO payload hits).
+export interface HoneypotHit {
+  endpoint_id: string;
+  hostname?: string;
+  decoy_port?: number;
+  service?: string;
+  attacker_ip?: string;
+  attacker_port?: number;
+  data_preview?: string;
+  count?: number;
+  timestamp?: string;
+  last_seen?: string;
+}
+
 interface EndpointViewProps {
   endpoints: EndpointInfo[];
   endpointAlerts: EndpointAlert[];
@@ -31,6 +46,8 @@ interface EndpointViewProps {
   userRole?: string;
   /** Navigate to Attack Reconstruction view for a given incident */
   onInvestigateIncident?: (incidentId: string) => void;
+  /** Live decoy-port honeypot hits (deception layer) */
+  honeypotHits?: HoneypotHit[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -121,6 +138,7 @@ export default function EndpointView({
   incidentReports = [],
   userRole,
   onInvestigateIncident,
+  honeypotHits = [],
 }: EndpointViewProps) {
   // Which endpoint card is "selected" by clicking an alert row
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -781,6 +799,94 @@ export default function EndpointView({
               })}
             </AnimatePresence>
           </StaggerContainer>
+        )}
+      </div>
+
+      {/* ── Honeypot / Deception ─────────────────────────────────────────────── */}
+      <div style={panel}>
+        <div
+          style={{
+            padding: "12px 20px",
+            borderBottom: "1px solid #0a1120",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <span style={{ fontSize: 12, fontWeight: 700, color: "#f59e0b", letterSpacing: 0.5 }}>
+            🍯 HONEYPOT / DECEPTION
+          </span>
+          <span
+            style={{
+              background: honeypotHits.length > 0 ? "#7f1d1d33" : "var(--bg-card)",
+              color: honeypotHits.length > 0 ? "#fca5a5" : "var(--text-secondary)",
+              borderRadius: 10, padding: "1px 8px", fontSize: 10, fontWeight: 700,
+            }}
+          >
+            {honeypotHits.length}
+          </span>
+          <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-muted)" }}>
+            decoy-port intrusion sensor — any hit is a high-confidence probe
+          </span>
+        </div>
+
+        {honeypotHits.length === 0 ? (
+          <div style={{ padding: "28px 20px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
+            No honeypot activity — decoy ports are quiet. A connection to any decoy port will appear here instantly.
+          </div>
+        ) : (
+          <>
+            {/* Summary strip */}
+            <div style={{ display: "flex", gap: 24, padding: "10px 20px", borderBottom: "1px solid #0a1120", flexWrap: "wrap" }}>
+              {[
+                { k: "Total Hits", v: honeypotHits.reduce((s, h) => s + (h.count ?? 1), 0) },
+                { k: "Unique Attackers", v: new Set(honeypotHits.map(h => h.attacker_ip).filter(Boolean)).size },
+                { k: "Decoy Ports Touched", v: new Set(honeypotHits.map(h => h.decoy_port).filter(v => v != null)).size },
+                { k: "Endpoints Probed", v: new Set(honeypotHits.map(h => h.endpoint_id)).size },
+              ].map(({ k, v }) => (
+                <div key={k}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#f59e0b" }}>{v}</div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>{k}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ color: "var(--text-muted)", textAlign: "left" }}>
+                    {["Time", "Endpoint", "Attacker IP", "Decoy Port", "Service", "Payload Preview", "Hits", ...(userRole !== "viewer" ? ["Action"] : [])].map(h => (
+                      <th key={h} style={{ padding: "8px 12px", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", borderBottom: "1px solid #0a1120" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {honeypotHits.slice(0, 30).map((h, i) => (
+                    <tr key={`${h.endpoint_id}-${h.attacker_ip}-${h.decoy_port}-${i}`} style={{ borderBottom: "1px solid #0a112055" }}>
+                      <td style={{ padding: "8px 12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{timeAgo(h.last_seen ?? h.timestamp ?? "")}</td>
+                      <td style={{ padding: "8px 12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{h.hostname ?? h.endpoint_id}</td>
+                      <td style={{ padding: "8px 12px", fontFamily: "'Fira Code', monospace", color: "#fca5a5", fontWeight: 700, whiteSpace: "nowrap" }}>{h.attacker_ip || "—"}{h.attacker_port ? `:${h.attacker_port}` : ""}</td>
+                      <td style={{ padding: "8px 12px", fontFamily: "'Fira Code', monospace", color: "#f59e0b", whiteSpace: "nowrap" }}>{h.decoy_port ?? "—"}</td>
+                      <td style={{ padding: "8px 12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{h.service || "—"}</td>
+                      <td style={{ padding: "8px 12px", fontFamily: "'Fira Code', monospace", color: "var(--text-muted)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.data_preview || "—"}</td>
+                      <td style={{ padding: "8px 12px", color: "var(--text-secondary)", textAlign: "center" }}>{h.count ?? 1}</td>
+                      {userRole !== "viewer" && (
+                        <td style={{ padding: "8px 12px" }}>
+                          {h.attacker_ip ? (
+                            <button
+                              onClick={() => onSendCommand({ endpoint_id: h.endpoint_id, action: "block_ip", target: h.attacker_ip! })}
+                              style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #f9731655", background: "#f9731618", color: "#f97316", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
+                            >
+                              Block IP
+                            </button>
+                          ) : "—"}
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 

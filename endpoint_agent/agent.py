@@ -46,7 +46,8 @@ if str(_AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(_AGENT_DIR))
 
 from identity import get_identity                                 # noqa: E402
-from sender import send_telemetry                                 # noqa: E402
+from sender import send_telemetry, post_json                      # noqa: E402
+from honeypot import Honeypot                                     # noqa: E402
 from command_listener import (                                    # noqa: E402
     acknowledge_command,
     check_and_warn_admin,
@@ -353,6 +354,49 @@ async def _command_loop(
 
 
 # ---------------------------------------------------------------------------
+# Honeypot loop — drains decoy-port hits and ships them to the backend
+# ---------------------------------------------------------------------------
+
+
+async def _honeypot_loop(
+    honeypot: Honeypot,
+    identity: dict,
+    backend_url: str,
+    api_key: str,
+    interval: float = 3.0,
+) -> None:
+    """Every `interval` seconds, drain buffered honeypot hits and POST them to
+    /endpoint/honeypot. A hit on a decoy port is a high-confidence intrusion
+    signal, so these are sent promptly and independently of the telemetry loop."""
+    endpoint_id = identity["endpoint_id"]
+    hostname = identity.get("hostname", "")
+    log.info("Honeypot loop started — decoy ports: %s", honeypot.active_ports or "(none bound)")
+    while True:
+        try:
+            hits = honeypot.drain_hits()
+            if hits:
+                payload = {
+                    "endpoint_id": endpoint_id,
+                    "hostname": hostname,
+                    "hits": hits,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                ok, _ = await post_json("/endpoint/honeypot", payload, backend_url, api_key)
+                if ok:
+                    log.warning("Reported %d honeypot hit(s) to backend.", len(hits))
+                else:
+                    # Re-buffer nothing (avoid unbounded growth); a repeat probe
+                    # will regenerate a hit. Just log the miss.
+                    log.warning("Honeypot report failed — %d hit(s) dropped this cycle.", len(hits))
+        except asyncio.CancelledError:
+            log.info("Honeypot loop cancelled.")
+            raise
+        except Exception as exc:
+            log.error("Unexpected honeypot loop error: %s", exc, exc_info=True)
+        await asyncio.sleep(interval)
+
+
+# ---------------------------------------------------------------------------
 # Banner + startup
 # ---------------------------------------------------------------------------
 
@@ -438,17 +482,27 @@ async def _main() -> None:
     )
     health_thread.start()
 
-    # Run both loops concurrently; if either raises an uncaught exception the
-    # whole gather propagates it so the process exits with a non-zero code
+    # Start the deception honeypot (shares the agent lifecycle — no separate
+    # control). Binds only free decoy ports; disabled via XDR_HONEYPOT_ENABLED.
+    honeypot = Honeypot()
+    try:
+        await honeypot.start()
+    except Exception as exc:
+        log.error("Honeypot failed to start (continuing without it): %s", exc)
+
+    # Run all loops concurrently; if any raises an uncaught exception the whole
+    # gather propagates it so the process exits with a non-zero code
     # (Task Scheduler / NSSM will restart it).
     try:
         await asyncio.gather(
             _telemetry_loop(identity, args.backend_url, args.api_key, args.collect_interval),
             _command_loop(identity, args.backend_url, args.api_key, args.command_interval, args.simulate),
+            _honeypot_loop(honeypot, identity, args.backend_url, args.api_key),
         )
     except asyncio.CancelledError:
         pass
     finally:
+        await honeypot.stop()
         await _notify_disconnect(identity, args.backend_url, args.api_key)
 
 

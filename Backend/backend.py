@@ -143,6 +143,7 @@ _COLLECTION_CAP = {
     "endpoint_registry":       500,
     "endpoint_commands":     2_000,
     "endpoint_timelines":   50_000,
+    "honeypot_events":       5_000,   # decoy-port intrusion hits (deception layer)
     # EDR Orchestration — response plans and incident reports
     "response_plans":        2_000,
     # incident_reports has no cap (PDFs are stored on disk; only metadata here)
@@ -7437,6 +7438,125 @@ async def endpoint_disconnect(body: dict = Body(...)):
     })
 
     return {"status": "ok", "endpoint_id": endpoint_id}
+
+
+@app.post("/endpoint/honeypot", dependencies=[Depends(_require_key)])
+async def endpoint_honeypot(body: dict = Body(...)):
+    """
+    Receive decoy-port honeypot hits from an endpoint agent. A connection to a
+    decoy port is a HIGH-confidence intrusion signal (nothing legitimate ever
+    touches it), so each hit is persisted to `honeypot_events`, surfaced to the
+    SOC via `honeypot_alert` + `endpoint_alert`, and the attacker IP is made
+    available for a Block IP SOAR action. Phase 1 = detect + alert (no auto-block).
+    """
+    endpoint_id = str(body.get("endpoint_id", "")).strip()
+    hostname = str(body.get("hostname", endpoint_id))
+    hits = body.get("hits", [])
+    if not endpoint_id:
+        raise HTTPException(400, "endpoint_id required")
+    if not isinstance(hits, list) or not hits:
+        return {"status": "ok", "stored": 0}
+
+    now_iso = _now()
+    docs = []
+    attacker_ips = set()
+    for h in hits:
+        if not isinstance(h, dict):
+            continue
+        ip = str(h.get("attacker_ip", "")).strip()
+        if ip:
+            attacker_ips.add(ip)
+        docs.append({
+            "endpoint_id":   endpoint_id,
+            "hostname":      hostname,
+            "decoy_port":    h.get("decoy_port"),
+            "service":       str(h.get("service", "")),
+            "attacker_ip":   ip,
+            "attacker_port": h.get("attacker_port"),
+            "data_preview":  str(h.get("data_preview", ""))[:200],
+            "count":         int(h.get("count", 1) or 1),
+            "timestamp":     str(h.get("timestamp", now_iso)),
+            "last_seen":     str(h.get("last_seen", h.get("timestamp", now_iso))),
+            "received_at":   now_iso,
+            "ts_dt":         _now_dt(),
+            "severity":      "HIGH",
+        })
+
+    if MONGO_OK and _db is not None and docs:
+        try:
+            await asyncio.to_thread(lambda: _db["honeypot_events"].insert_many([dict(d) for d in docs]))
+            # Stamp the registry so the endpoint card can show recent deception activity.
+            await asyncio.to_thread(lambda: _db["endpoint_registry"].update_one(
+                {"endpoint_id": endpoint_id},
+                {"$set": {"last_honeypot_hit": now_iso},
+                 "$inc": {"honeypot_hit_count": len(docs)}},
+            ))
+        except Exception as _hp_exc:
+            logger.warning("[endpoint/honeypot] persist failed: %s", _hp_exc)
+
+    ports = sorted({d["decoy_port"] for d in docs if d.get("decoy_port") is not None})
+    logger.warning(
+        "[HONEYPOT] %s (%s): %d hit(s) from %d attacker IP(s) on ports %s",
+        endpoint_id, hostname, len(docs), len(attacker_ips), ports,
+    )
+
+    # Dedicated event for the deception panel
+    await sio.emit("honeypot_alert", _strip_mongo({
+        "endpoint_id":   endpoint_id,
+        "hostname":      hostname,
+        "hits":          docs,
+        "attacker_ips":  sorted(attacker_ips),
+        "decoy_ports":   ports,
+        "count":         len(docs),
+        "timestamp":     now_iso,
+    }))
+
+    # Also surface in the existing Endpoint Alerts stream so it is impossible to miss.
+    _ips_str = ", ".join(sorted(attacker_ips)) or "unknown"
+    await sio.emit("endpoint_alert", {
+        "endpoint_id": endpoint_id,
+        "hostname":    hostname,
+        "severity":    "HIGH",
+        "alert_type":  "Honeypot / Deception",
+        "attack_type": "Decoy-Port Probe",
+        "message":     f"Honeypot triggered — {_ips_str} probed decoy port(s) {ports}",
+        "src_ip":      sorted(attacker_ips)[0] if attacker_ips else "",
+        "timestamp":   now_iso,
+    })
+
+    return {"status": "ok", "stored": len(docs), "attacker_ips": sorted(attacker_ips)}
+
+
+@app.get("/endpoint/honeypot/{endpoint_id}", dependencies=[Depends(_require_key_or_jwt)])
+async def endpoint_honeypot_history(endpoint_id: str, limit: int = 100):
+    """Return recent honeypot hits for one endpoint plus a summary, for the SOC
+    deception panel. Newest first."""
+    limit = max(1, min(int(limit), 500))
+    if not MONGO_OK or _db is None:
+        return {"endpoint_id": endpoint_id, "events": [], "summary": {}}
+    try:
+        events = await asyncio.to_thread(lambda: list(
+            _db["honeypot_events"]
+            .find({"endpoint_id": endpoint_id}, {"_id": 0})
+            .sort("_id", DESCENDING)
+            .limit(limit)
+        ))
+    except Exception as _hh_exc:
+        logger.warning("[endpoint/honeypot history] query failed: %s", _hh_exc)
+        return {"endpoint_id": endpoint_id, "events": [], "summary": {}}
+
+    attackers = sorted({e.get("attacker_ip", "") for e in events if e.get("attacker_ip")})
+    ports = sorted({e.get("decoy_port") for e in events if e.get("decoy_port") is not None})
+    total_hits = sum(int(e.get("count", 1) or 1) for e in events)
+    summary = {
+        "total_records":  len(events),
+        "total_hits":     total_hits,
+        "unique_attackers": len(attackers),
+        "attacker_ips":   attackers,
+        "decoy_ports":    ports,
+        "last_seen":      events[0].get("received_at") if events else None,
+    }
+    return {"endpoint_id": endpoint_id, "events": events, "summary": summary}
 
 
 @app.get("/endpoint/{endpoint_id}", dependencies=[Depends(_require_key_or_jwt)])

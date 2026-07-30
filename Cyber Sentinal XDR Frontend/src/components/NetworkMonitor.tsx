@@ -57,6 +57,20 @@ const MAX_CHART_POINTS = 30;
 // Extended ViewId to include views not in Sidebar's ViewId
 type ExtViewId = ViewId | "attack-reconstruction";
 
+// A single decoy-port honeypot hit, flattened for the deception panel.
+export interface HoneypotHit {
+  endpoint_id: string;
+  hostname?: string;
+  decoy_port?: number;
+  service?: string;
+  attacker_ip?: string;
+  attacker_port?: number;
+  data_preview?: string;
+  count?: number;
+  timestamp?: string;
+  last_seen?: string;
+}
+
 export default function NetworkMonitor() {
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
@@ -98,6 +112,8 @@ export default function NetworkMonitor() {
   const [sysmonLogs, setSysmonLogs] = useState<any[]>([]);
   const [endpoints, setEndpoints] = useState<EndpointInfo[]>([]);
   const [endpointAlerts, setEndpointAlerts] = useState<EndpointAlert[]>([]);
+  // Honeypot / deception hits (flattened, newest first, tagged with endpoint).
+  const [honeypotHits, setHoneypotHits] = useState<HoneypotHit[]>([]);
   const [commandResults, setCommandResults] = useState<CommandResult[]>([]);
   const [activeEndpointId, setActiveEndpointId] = useState<string | null>(null);
   const [endpointFusionAlerts, setEndpointFusionAlerts] = useState<EndpointFusionAlert[]>([]);
@@ -589,6 +605,28 @@ export default function NetworkMonitor() {
       setEndpointAlerts(prev => [data, ...prev].slice(0, 50));
     });
 
+    socket.on("honeypot_alert", (data: any) => {
+      const rawHits: any[] = Array.isArray(data?.hits) ? data.hits : [];
+      const tagged: HoneypotHit[] = rawHits.map(h => ({
+        endpoint_id: data.endpoint_id,
+        hostname: data.hostname,
+        decoy_port: h.decoy_port,
+        service: h.service,
+        attacker_ip: h.attacker_ip,
+        attacker_port: h.attacker_port,
+        data_preview: h.data_preview,
+        count: h.count,
+        timestamp: h.timestamp,
+        last_seen: h.last_seen,
+      }));
+      if (tagged.length) {
+        setHoneypotHits(prev => [...tagged, ...prev].slice(0, 200));
+        const ips = (data.attacker_ips ?? []).join(", ") || "unknown";
+        toast.error(`🍯 Honeypot triggered on ${data.hostname ?? data.endpoint_id}: ${ips}`,
+          { duration: 5000 });
+      }
+    });
+
     socket.on("endpoint_offline", (data: { endpoint_id: string; hostname?: string; reason?: string; timestamp?: string }) => {
       setEndpoints(prev =>
         prev.map(e =>
@@ -901,6 +939,7 @@ export default function NetworkMonitor() {
       socket.off("soc_alert");
       socket.off("endpoint_update");
       socket.off("endpoint_alert");
+      socket.off("honeypot_alert");
       socket.off("endpoint_offline");
       socket.off("command_result");
       socket.off("command_queued");
@@ -1328,6 +1367,7 @@ export default function NetworkMonitor() {
                   incidentReports={incidentReports}
                   userRole={user?.role}
                   onInvestigateIncident={handleInvestigateIncident}
+                  honeypotHits={honeypotHits}
                 />
               </motion.div>
             ) : activeView === "attack-reconstruction" && activeIncidentId ? (
