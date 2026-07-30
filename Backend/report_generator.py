@@ -342,6 +342,202 @@ _DEFAULT_REMEDIATION = [
     "Escalate to a senior analyst and document the investigation.",
 ]
 
+# ---------------------------------------------------------------------------
+# Threat-intelligence knowledge base — deep, attack-type-specific explanation
+# rendered in the "Attack Narrative & Threat Analysis" section. Each entry has:
+#   what   — what the attack/technique is (definition)
+#   how    — how it works and how this system detected it (mechanics)
+#   impact — why it is dangerous (potential consequences)
+#   next   — the attacker's likely next steps (so the analyst can get ahead)
+# Keyed by lowercase substring; first match wins (see _threat_intel_for).
+# ---------------------------------------------------------------------------
+THREAT_INTEL = {
+    "portscan": {
+        "what": "A port scan is a reconnaissance technique in which an attacker sends probe "
+                "packets to a range of TCP/UDP ports on one or more hosts to discover which "
+                "services are listening and reachable.",
+        "how": "The scanner opens (or half-opens) many short-lived connections — typically SYN "
+               "packets that never complete the handshake — across sequential or targeted ports. "
+               "The signature is many distinct destination ports contacted by a single source in a "
+               "short window, which is exactly what the rule engine and ML classifier flagged here "
+               "(note the high SYN-flag count relative to completed connections in the evidence table).",
+        "impact": "A scan by itself does not compromise a host, but it maps the attack surface — open "
+                  "ports, service versions, and firewall gaps — that an adversary uses to plan the next "
+                  "stage. A scan originating from an INTERNAL host frequently means that host is already "
+                  "compromised and is being used to pivot.",
+        "next": "Expect service/version fingerprinting, vulnerability scanning against the discovered "
+                "ports, and then targeted exploitation or brute-force against exposed services such as "
+                "RDP (3389), SMB (445), or SSH (22).",
+    },
+    "ddos": {
+        "what": "A Distributed Denial of Service (DDoS) attack overwhelms a target with more traffic or "
+                "connection requests than it can process, exhausting bandwidth, CPU, or connection tables "
+                "so legitimate users are denied service.",
+        "how": "Many sources (often a botnet) send high volumes of packets — SYN floods, UDP/ICMP floods, "
+               "or application-layer requests. The engine flags the abnormal packet rate, connection rate, "
+               "and low completed-handshake ratio characteristic of a flood.",
+        "impact": "Service outage, degraded performance, and financial/reputational loss. DDoS is also used "
+                  "as a smokescreen to distract responders while a separate intrusion is carried out.",
+        "next": "The attacker may sustain or escalate the flood, rotate source IPs to evade blocks, or pair "
+                "the DoS with a parallel intrusion attempt while defenders are distracted.",
+    },
+    "dos": {
+        "what": "A Denial of Service (DoS) attack exhausts the resources of a single target service or "
+                "endpoint so it can no longer serve legitimate requests.",
+        "how": "A single source generates a flood of connections or malformed requests that consume "
+               "sockets, CPU, or memory. The engine detects the resource-exhaustion traffic pattern.",
+        "impact": "Loss of availability for the targeted service and possible cascading failures on "
+                  "dependent systems.",
+        "next": "The source may intensify the flood or pivot to a distributed approach; monitor for a "
+                "concurrent intrusion under cover of the outage.",
+    },
+    "ransomware": {
+        "what": "Ransomware is malware that encrypts files on the victim's system and any reachable network "
+                "shares, then demands payment for the decryption key. This event combines malicious file "
+                "activity with abnormal system resource behaviour — the classic ransomware signature.",
+        "how": "After initial access the payload enumerates files and spawns rapid read-write-rename/delete "
+               "cycles to encrypt data, usually deletes volume shadow copies, and drops a ransom note. The "
+               "sharp resource-usage spike and mass file modification are the behavioural indicators detected.",
+        "impact": "Irreversible data loss without offline backups, full operational shutdown, and extortion. "
+                  "Modern ransomware also exfiltrates data first for 'double extortion'.",
+        "next": "Encryption spreads to mapped drives and peer hosts within minutes; attackers may exfiltrate "
+                "data, disable backups and AV, and post to a leak site. IMMEDIATE network isolation is critical.",
+    },
+    "malware": {
+        "what": "Malware is any software built to harm, exploit, or gain unauthorised access to a system. "
+                "This detection flagged a Portable Executable (PE) file whose static structure matches "
+                "known-malicious characteristics learned by the LightGBM classifier from the EMBER dataset.",
+        "how": "The engine extracts static PE features (imported APIs, section entropy, header anomalies, "
+               "byte/string patterns) and scores them. A high score means the binary resembles malware "
+               "families seen in training WITHOUT requiring an exact signature match — enabling detection of "
+               "novel/obfuscated variants.",
+        "impact": "Depending on family, malware can steal credentials, install a backdoor, join a botnet, "
+                  "mine cryptocurrency, or stage ransomware. A high-confidence, unsigned, untrusted binary "
+                  "should be treated as an active threat.",
+        "next": "The file may attempt persistence (run keys, services, scheduled tasks), privilege "
+                "escalation, C2 contact, or lateral spread. Quarantine it and hunt for the same hash "
+                "across every endpoint.",
+    },
+    "c2": {
+        "what": "Command-and-Control (C2) is the channel a compromised host uses to receive attacker "
+                "instructions. 'Beaconing' is the periodic check-in traffic a malware implant sends to its "
+                "controller.",
+        "how": "The implant contacts the C2 server at regular intervals — often over HTTP/HTTPS/DNS to blend "
+               "in with normal traffic. The engine detects the periodicity and destination characteristics "
+               "that distinguish a beacon from ordinary browsing.",
+        "impact": "This confirms an ACTIVE compromise: the host is under remote attacker control and can be "
+                  "tasked to exfiltrate data, download further payloads, or pivot deeper.",
+        "next": "The attacker escalates via credential theft, lateral movement, and data staging/exfiltration. "
+                "Blocking the C2 destination and eradicating the implant are urgent.",
+    },
+    "beacon": None,  # alias → resolved to "c2" below
+    "brute": {
+        "what": "A brute-force attack attempts to guess valid credentials by systematically trying many "
+                "username/password combinations against an authentication service.",
+        "how": "The attacker submits rapid, repeated login attempts (dictionary lists or credential "
+               "stuffing). A high failed-authentication rate from one source against an account or service "
+               "is the signature.",
+        "impact": "A successful guess yields a VALID account, granting access that blends in with legitimate "
+                  "activity. Aggressive attempts can also lock users out (denial of service).",
+        "next": "On success: account takeover, privilege enumeration, and lateral movement using the valid "
+                "credentials. Enforce account lockout and MFA immediately.",
+    },
+    "lateral": {
+        "what": "Lateral movement is how an attacker moves from an initially compromised host to other "
+                "systems, expanding control toward high-value targets like domain controllers.",
+        "how": "Adversaries abuse remote services (SMB, RDP, WMI, PsExec) with stolen or valid credentials. "
+               "Unusual host-to-host administrative traffic is the indicator flagged here.",
+        "impact": "Widens the breach, brings the attacker closer to sensitive data and identity "
+                  "infrastructure, and makes full eradication much harder.",
+        "next": "Credential harvesting, privilege escalation to domain admin, and data discovery/staging. "
+                "Isolate involved hosts and rotate the abused credentials.",
+    },
+    "privilege": {
+        "what": "Privilege escalation is when an attacker exploits a flaw or misconfiguration to gain higher "
+                "permissions than granted (e.g., standard user → SYSTEM/root).",
+        "how": "Techniques include exploiting unpatched kernel/service vulnerabilities, token manipulation, "
+               "or abusing misconfigured services. The engine flagged the anomalous process behaviour "
+               "associated with the attempt.",
+        "impact": "Elevated privileges let the attacker disable defences, read all data, install persistent "
+                  "implants, and move laterally with authority — effectively total control of the host.",
+        "next": "Expect credential dumping, defence evasion, persistence, and progression toward domain "
+                "compromise. Treat the host as fully compromised.",
+    },
+    "infiltration": {
+        "what": "Infiltration via a public-facing application is when an adversary abuses a weakness in an "
+                "internet-exposed service (web server, VPN, API) to gain an initial foothold.",
+        "how": "The attacker sends crafted requests exploiting a vulnerability (injection, insecure "
+               "deserialization, authentication bypass) to execute code or extract data.",
+        "impact": "Provides initial access into the internal network, typically followed by persistence and "
+                  "lateral movement.",
+        "next": "Web shell or backdoor deployment, credential theft, and pivoting inward from the exposed host.",
+    },
+    "heartbleed": {
+        "what": "Heartbleed (CVE-2014-0160) is a vulnerability in older OpenSSL versions that lets an "
+                "attacker read chunks of server memory, potentially exposing private keys, credentials, and "
+                "session tokens.",
+        "how": "A malformed TLS heartbeat request tricks the server into returning up to 64 KB of memory per "
+               "request; repeated requests harvest whatever secrets happen to be in memory.",
+        "impact": "Leaked private keys enable decryption and server impersonation; leaked credentials and "
+                  "session tokens enable account takeover — all with no trace in normal application logs.",
+        "next": "Assume any secret in server memory was exposed: patch OpenSSL, rotate ALL keys/certificates, "
+                "and invalidate active sessions and credentials.",
+    },
+    "backdoor": {
+        "what": "A backdoor is a covert mechanism that bypasses normal authentication to give an attacker "
+                "persistent remote access to a system.",
+        "how": "It may be a hidden service, network listener, scheduled task, or trojanised binary that "
+               "awaits attacker connections or beacons outbound.",
+        "impact": "Persistent, stealthy access that survives reboots and lets the attacker re-enter even "
+                  "after other remediation — a foothold for long-term compromise.",
+        "next": "Remove all persistence and reimage the host; rotate credentials; hunt for the same backdoor "
+                "signature across the fleet.",
+    },
+    "botnet": {
+        "what": "A botnet is a network of compromised hosts ('bots') centrally controlled by an attacker to "
+                "perform coordinated tasks such as DDoS, spam, or credential attacks.",
+        "how": "The bot on this host communicates with C2 infrastructure to receive commands, exhibiting the "
+               "beaconing and traffic patterns flagged by the engine.",
+        "impact": "The host is fully attacker-controlled, participates in attacks against third parties, and "
+                  "may self-propagate to other machines.",
+        "next": "Clean the bot process, block the C2 infrastructure, check for worm-like spread, and rotate "
+                "credentials after eradication.",
+    },
+    "insider": {
+        "what": "An insider threat is anomalous activity by a legitimate user account — a malicious insider "
+                "or, just as often, a hijacked/compromised account — that deviates from that user's "
+                "established behavioural baseline.",
+        "how": "The user-behaviour model flagged deviations such as off-hours logons, unusual session origins, "
+               "or access volumes outside the learned baseline (see the User Behaviour rules and score).",
+        "impact": "Insiders operate with VALID credentials, so data theft or sabotage is hard to detect and "
+                  "can be high-impact. A compromised account looks identical to the real user until analysed.",
+        "next": "Preserve session and access evidence, compare recent activity against the baseline, and "
+                "engage HR/legal per policy before taking account action.",
+    },
+}
+# Resolve the beacon alias to the c2 entry.
+THREAT_INTEL["beacon"] = THREAT_INTEL["c2"]
+
+_DEFAULT_INTEL = {
+    "what": "This event was raised by correlated signals across multiple detection domains that together "
+            "exceeded the alerting threshold.",
+    "how": "The fusion engine combined the network, system, user-behaviour, and malware model scores; the "
+           "weighted result indicated anomalous and potentially malicious activity.",
+    "impact": "The precise impact depends on the confirmed technique; the event should be treated as a "
+              "credible threat pending analyst triage.",
+    "next": "Triage the contributing signals, confirm the underlying technique, and apply the recommended "
+            "remediation for the identified attack class.",
+}
+
+
+def _threat_intel_for(attack_type: str, mitre: str) -> dict:
+    """Resolve deep threat-intel content by keyword match on attack type / MITRE."""
+    key = (str(attack_type) + " " + str(mitre)).lower()
+    for token, intel in THREAT_INTEL.items():
+        if intel and token in key:
+            return intel
+    return _DEFAULT_INTEL
+
 # Human-readable labels + units for the CIC network flow features we surface as
 # evidence. Only present, non-zero values are shown.
 _NETWORK_EVIDENCE_FIELDS = [
@@ -1061,15 +1257,54 @@ def _build_attack_timeline(
     return elements
 
 
+def _malware_detail_rows(alert: dict, contributing: list) -> list:
+    """Extract malware-specific artifact fields (file, hash, label, confidence)
+    from the alert / contributing signals for the malware evidence sub-table."""
+    def _first(*keys):
+        for src in [alert] + [s for s in (contributing or []) if isinstance(s, dict)]:
+            for k in keys:
+                v = src.get(k)
+                if v not in (None, "", 0):
+                    return v
+        return None
+
+    rows = []
+    fp = _first("file_path", "path", "filepath", "file")
+    if fp:
+        rows.append(["File Path", _truncate(str(fp), 70)])
+    for label, keys in [
+        ("File Hash (SHA-256)", ("sha256", "hash", "sha_256")),
+        ("File Hash (MD5)",     ("md5",)),
+        ("Classifier Label",    ("label",)),
+        ("Model Confidence",    ("confidence", "malware_score", "model_score")),
+        ("Trusted / Signed",    ("trusted",)),
+        ("Trust Reason",        ("trust_reason",)),
+    ]:
+        v = _first(*keys)
+        if v is None:
+            continue
+        if label == "Model Confidence":
+            try:
+                v = f"{float(v) * 100:.1f}%" if float(v) <= 1.0 else f"{float(v):.1f}%"
+            except (TypeError, ValueError):
+                pass
+        elif label == "Trusted / Signed":
+            v = "Yes" if v in (True, "true", 1, "1") else "No"
+        rows.append([label, _truncate(str(v), 70)])
+    return rows
+
+
 def _build_narrative_section(
     styles, section_no: str, alert: dict, response_plan: dict, contributing: list,
 ) -> list:
-    """Plain-English incident narrative — what happened, who, and why it matters."""
+    """Plain-English incident narrative + deep, attack-type-specific threat analysis
+    (what the attack is, how it works, its impact, and the attacker's next steps)."""
     elements = []
-    elements.append(Paragraph(f"{section_no} — Attack Narrative", styles["section"]))
+    elements.append(Paragraph(f"{section_no} — Attack Narrative & Threat Analysis", styles["section"]))
     elements.append(Spacer(1, 2 * mm))
 
     attack_type = str(alert.get("attack_type", response_plan.get("attack_type", "Unknown")))
+    mitre = str(response_plan.get("mitre_technique", ""))
     severity = str(alert.get("severity", response_plan.get("severity", "UNKNOWN")))
     try:
         score = float(alert.get("threat_score", response_plan.get("threat_score", 0.0)))
@@ -1079,8 +1314,40 @@ def _build_narrative_section(
     target = str(alert.get("endpoint_id", response_plan.get("endpoint_id", "the endpoint")))
     features = _resolve_features(alert, response_plan, contributing)
 
+    # Incident-specific opening narrative
     text = _build_narrative_text(attack_type, severity, score, src_ip, target, features)
     elements.append(Paragraph(text, styles["body"]))
+    elements.append(Spacer(1, 3 * mm))
+
+    # Deep, attack-type-specific threat analysis
+    intel = _threat_intel_for(attack_type, mitre)
+    for heading, key in (
+        ("What this attack is",        "what"),
+        ("How it works &amp; how it was detected", "how"),
+        ("Potential impact",           "impact"),
+        ("Likely attacker next steps", "next"),
+    ):
+        body = intel.get(key)
+        if body:
+            elements.append(Paragraph(f"<b>{heading}:</b> {body}", styles["body"]))
+            elements.append(Spacer(1, 1.5 * mm))
+
+    # Malware-specific artifact detail (only when the detection is malware and
+    # the alert carries file/hash/label fields).
+    if "malware" in (attack_type.lower() + " " + str(alert.get("attack_type", "")).lower()) \
+            or alert.get("label") or alert.get("file_path"):
+        mrows = _malware_detail_rows(alert, contributing)
+        if mrows:
+            elements.append(Spacer(1, 1 * mm))
+            elements.append(Paragraph("<b>Detected file details:</b>", styles["body"]))
+            elements.append(Spacer(1, 1 * mm))
+            mtable = Table([["Attribute", "Value"]] + mrows, colWidths=[50 * mm, 120 * mm], repeatRows=1)
+            mstyle = TableStyle(list(_TABLE_HEADER_STYLE._cmds))
+            mstyle.add("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold")
+            mstyle.add("TEXTCOLOR", (0, 1), (0, -1), _MID_BLUE)
+            mtable.setStyle(mstyle)
+            elements.append(mtable)
+
     elements.append(Spacer(1, 4 * mm))
     return elements
 
