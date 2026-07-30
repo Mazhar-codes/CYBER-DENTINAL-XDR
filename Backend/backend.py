@@ -403,6 +403,16 @@ def _is_token_revoked(jti: str) -> bool:
 _last_rp_ts: dict[str, float] = {}
 _RP_COOLDOWN = 120.0
 
+# Per-endpoint user-behaviour anomaly state (hysteresis + snooze), keyed by
+# endpoint_id → {"anomaly_until": epoch, "snooze_until": epoch}. Hysteresis
+# stops the per-tick ANOMALY/NORMAL flicker (the model score wobbles across the
+# threshold every 5 s); once anomalous the state stays anomalous for
+# _USER_ANOMALY_STICKY seconds. Snooze (set by POST /user-behavior/snooze)
+# forces NORMAL for a chosen window so an analyst can silence a known late
+# worker; when it expires, if the session is still anomalous the alarm re-fires.
+_ep_user_state: dict[str, dict] = {}
+_USER_ANOMALY_STICKY = 90.0   # seconds an anomaly persists after the last hot tick
+
 # ---------------------------------------------------------------------------
 # Endpoint telemetry rate-limiter — keyed by endpoint_id, value is last ingest time
 # ---------------------------------------------------------------------------
@@ -6659,8 +6669,20 @@ async def endpoint_ingest(payload: EndpointTelemetry):
         })
 
     # Always emit user_anomaly for endpoint sessions so User Behavior view stays populated.
-    # prediction_label reflects the 0.70 anomaly threshold in score_session_telemetry().
-    _ep_is_anomaly = _usr_detail.get("anomaly", False)
+    # prediction_label reflects the 0.70 anomaly threshold in score_session_telemetry(),
+    # stabilised with hysteresis (kills the per-tick flicker) and gated by snooze.
+    _raw_anomaly = bool(_usr_detail.get("anomaly", False))
+    _ub_now = time.time()
+    _ub_st = _ep_user_state.setdefault(ep.endpoint_id, {})
+    _snoozed = _ub_now < _ub_st.get("snooze_until", 0.0)
+    if _snoozed:
+        _ep_is_anomaly = False                       # silenced by analyst snooze
+    elif _raw_anomaly:
+        _ub_st["anomaly_until"] = _ub_now + _USER_ANOMALY_STICKY
+        _ep_is_anomaly = True
+    else:
+        _ep_is_anomaly = _ub_now < _ub_st.get("anomaly_until", 0.0)   # sticky hold
+    _snooze_remaining = max(0, int(_ub_st.get("snooze_until", 0.0) - _ub_now))
     await sio.emit("user_anomaly", {
         "user":             ep.username,
         "hostname":         ep.hostname,
@@ -6668,6 +6690,8 @@ async def endpoint_ingest(payload: EndpointTelemetry):
         "source":           "endpoint",
         "anomaly_score":    user_score,
         "prediction_label": "ANOMALY" if _ep_is_anomaly else "NORMAL",
+        "snoozed":          _snoozed,
+        "snooze_remaining_s": _snooze_remaining,
         "user_score":           round(float(_usr_detail.get("user_score", user_score)), 4),
         "concurrent_sessions":  int(_usr_detail.get("session_count", _usr_detail.get("concurrent_sessions", 0))),
         "unusual_hour":         1.0 if (_usr_detail.get("unusual_hours_detected") or _usr_detail.get("unusual_hour")) else 0.0,
@@ -9048,6 +9072,52 @@ async def update_user_rules(
     logger.info("[SETTINGS] User Behavior rules saved by user=%s: %s", username, _detail)
 
     return {"status": "ok", "rules": body.dict(), "message": "User Behavior rules updated and applied in-memory"}
+
+
+@app.post("/user-behavior/snooze")
+async def snooze_user_behavior(
+    request: Request,
+    body: dict = Body(...),
+    credentials: str = Depends(_require_analyst_or_admin_jwt),
+):
+    """Snooze the off-hours / insider-threat alarm for one endpoint's user for a
+    chosen window (default 60 min). During the snooze the endpoint reports NORMAL
+    and no siren fires; when it expires, if the session is still anomalous the
+    alarm re-fires automatically. Admin/analyst only.
+    Body: {"endpoint_id": str, "minutes": int (optional, default 60)}"""
+    endpoint_id = str(body.get("endpoint_id", "")).strip()
+    if not endpoint_id:
+        raise HTTPException(400, "endpoint_id required")
+    try:
+        minutes = int(body.get("minutes", 60))
+    except (TypeError, ValueError):
+        minutes = 60
+    minutes = max(1, min(minutes, 1440))   # 1 min .. 24 h
+
+    now = time.time()
+    st = _ep_user_state.setdefault(endpoint_id, {})
+    st["snooze_until"] = now + minutes * 60
+    st["anomaly_until"] = 0.0   # clear sticky hold so it goes NORMAL immediately
+    until_iso = datetime.fromtimestamp(st["snooze_until"], tz=timezone.utc).isoformat()
+
+    username = _jwt_sub_from_request(request) or "api_key"
+    _ip = request.client.host if request.client else "unknown"
+    _audit = {
+        "user": username, "user_id": username, "action": "user_behavior_snoozed",
+        "ip": _ip, "timestamp": _now(), "status": "success",
+        "details": f"endpoint={endpoint_id} minutes={minutes}",
+        "detail": f"Snoozed insider-threat alarm for {endpoint_id} ({minutes} min)",
+    }
+    if MONGO_OK and _db is not None:
+        asyncio.create_task(asyncio.to_thread(lambda: _db["audit_logs"].insert_one({**_audit})))
+    await sio.emit("audit_event", _audit)
+    # Tell the dashboard to reflect the snooze immediately.
+    await sio.emit("user_behavior_snooze", {
+        "endpoint_id": endpoint_id, "minutes": minutes,
+        "snooze_until": until_iso, "snooze_remaining_s": minutes * 60,
+    })
+    logger.info("[UBA] snooze set: endpoint=%s minutes=%d by=%s", endpoint_id, minutes, username)
+    return {"status": "ok", "endpoint_id": endpoint_id, "minutes": minutes, "snooze_until": until_iso}
 
 
 # ---------------------------------------------------------------------------

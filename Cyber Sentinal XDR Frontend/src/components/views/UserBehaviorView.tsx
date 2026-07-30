@@ -4,6 +4,10 @@ import SeverityBadge from "../shared/SeverityBadge";
 import LiveIndicator from "../shared/LiveIndicator";
 import { UserAnomalyRow, UserBehaviorSummary, SEVERITY_COLOUR, fmtTime } from "../shared/types";
 import { useThemeContext } from "../../context/ThemeContext";
+import { authAxios } from "../../services/authService";
+import { BACKEND_URL } from "../../config";
+import { useAuth } from "../../context/AuthContext";
+import toast from "react-hot-toast";
 
 type TimeRange = "1h" | "6h" | "24h" | "all";
 
@@ -56,6 +60,31 @@ export default function UserBehaviorView({
   isMonitoring,
 }: UserBehaviorViewProps) {
   const { colors } = useThemeContext();
+  const { user } = useAuth();
+  const canSnooze = user?.role === "admin" || user?.role === "analyst";
+
+  // Locally-tracked snooze expiries so the button reflects the action instantly
+  // (endpoint_id → epoch ms when the snooze ends), independent of the next tick.
+  const [snoozedUntil, setSnoozedUntil] = useState<Record<string, number>>({});
+
+  const handleSnooze = useCallback(async (endpointId: string, minutes = 60) => {
+    if (!endpointId) return;
+    setSnoozedUntil((prev) => ({ ...prev, [endpointId]: Date.now() + minutes * 60_000 }));
+    try {
+      await authAxios.post(`${BACKEND_URL}/user-behavior/snooze`, {
+        endpoint_id: endpointId,
+        minutes,
+      });
+      toast.success(`Insider-threat alarm snoozed ${minutes}m for this endpoint.`, { duration: 3000 });
+    } catch {
+      setSnoozedUntil((prev) => {
+        const next = { ...prev };
+        delete next[endpointId];
+        return next;
+      });
+      toast.error("Failed to snooze — admin/analyst role required.", { duration: 3000 });
+    }
+  }, []);
   const [filter, setFilter] = useState<"ALL" | "ANOMALY" | "NORMAL">("ALL");
   const [pulse, setPulse] = useState(false);
   const prevCountRef = useRef(0);
@@ -590,6 +619,45 @@ export default function UserBehaviorView({
                             {row.hostname}
                           </span>
                         )}
+                        {/* Off-hours alarm snooze control (endpoint rows) */}
+                        {isEndpoint && row.endpoint_id && (() => {
+                          const localUntil = snoozedUntil[row.endpoint_id] ?? 0;
+                          const isSnoozed = row.snoozed || localUntil > Date.now();
+                          const remainMin = row.snooze_remaining_s
+                            ? Math.ceil(row.snooze_remaining_s / 60)
+                            : localUntil > Date.now()
+                            ? Math.ceil((localUntil - Date.now()) / 60000)
+                            : 0;
+                          if (isSnoozed) {
+                            return (
+                              <span style={{
+                                display: "inline-block", marginTop: 4,
+                                background: "rgba(148,163,184,0.15)", color: "var(--text-muted)",
+                                border: "1px solid rgba(148,163,184,0.3)", borderRadius: 4,
+                                padding: "1px 7px", fontSize: 9, fontWeight: 700, letterSpacing: 0.5,
+                              }}>
+                                🔕 SNOOZED{remainMin > 0 ? ` — ${remainMin}m left` : ""}
+                              </span>
+                            );
+                          }
+                          if (isAnomaly && canSnooze) {
+                            return (
+                              <button
+                                onClick={() => handleSnooze(row.endpoint_id!, 60)}
+                                title="Silence this off-hours / insider-threat alarm for 1 hour. It re-fires afterwards if still anomalous."
+                                style={{
+                                  display: "inline-block", marginTop: 4,
+                                  background: "rgba(245,158,11,0.1)", color: "var(--accent-amber)",
+                                  border: "1px solid rgba(245,158,11,0.4)", borderRadius: 5,
+                                  padding: "2px 9px", fontSize: 10, fontWeight: 700, cursor: "pointer",
+                                }}
+                              >
+                                🔕 Snooze 1h
+                              </button>
+                            );
+                          }
+                          return null;
+                        })()}
                         {/* SHAP explanation chips */}
                         {row.shap_explanation && row.shap_explanation.length > 0 && (
                           <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 3 }}>

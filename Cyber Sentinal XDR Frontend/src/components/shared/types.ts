@@ -125,6 +125,9 @@ export interface UserAnomalyRow {
   endpoint_id?: string;
   hostname?: string;
   source?: string;
+  // Alarm snooze state (set server-side via POST /user-behavior/snooze)
+  snoozed?: boolean;
+  snooze_remaining_s?: number;
   // SHAP explanation strings (when shap_agent runs on user anomaly)
   shap_explanation?: string[];
   // Endpoint-agent specific fields (from UserBehaviorAgent.score_session_telemetry)
