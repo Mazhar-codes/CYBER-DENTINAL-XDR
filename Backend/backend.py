@@ -3613,6 +3613,8 @@ async def _process_network_result(result: dict):
                 fusion=fusion,
                 ts=ts,
                 shap_fusion=shap_fusion,
+                features=hit.get("features"),
+                src_ip=hit.get("src_ip", ""),
             )
             if _graph_engine:
                 try:
@@ -3699,6 +3701,8 @@ async def _process_network_result(result: dict):
                 fusion=fusion,
                 ts=ts,
                 shap_fusion=shap_fusion,
+                features=ml.get("features"),
+                src_ip=ml.get("src_ip", ""),
             )
             if _graph_engine:
                 try:
@@ -4717,6 +4721,8 @@ async def _maybe_generate_network_response_plan(
     fusion,  # FusionResult object
     ts: str,
     shap_fusion=None,
+    features: dict | None = None,
+    src_ip: str = "",
 ) -> None:
     """Generate and emit a response plan directly for HIGH/CRITICAL network attacks
     without requiring multi-source correlation."""
@@ -4728,6 +4734,11 @@ async def _maybe_generate_network_response_plan(
         return
     _last_rp_ts[endpoint_id] = _now_mono
     try:
+        # Resolve the attacker IP: explicit arg → fusion.endpoint_id (if IP-like).
+        _resolved_src_ip = str(src_ip or "").strip()
+        if not re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", _resolved_src_ip):
+            _fe_id = str(getattr(fusion, "endpoint_id", "") or "")
+            _resolved_src_ip = _fe_id if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", _fe_id) else ""
         _plan = generate_response_plan({
             "endpoint_id":          endpoint_id,
             "severity":             severity,
@@ -4739,8 +4750,14 @@ async def _maybe_generate_network_response_plan(
             ) if shap_fusion else [],
             "threat_score":         getattr(fusion, "threat_score", 0.0),
             "sources":              ["network"],
-            "src_ip":               getattr(fusion, "endpoint_id", "") if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", str(getattr(fusion, "endpoint_id", ""))) else "",
+            "src_ip":               _resolved_src_ip,
         })
+        # Stash the raw flow feature vector + attacker IP on the plan so the PDF
+        # incident report can surface network evidence + IOCs (and feedback can
+        # resolve retrain-ready features). Mirrors the correlated-alert path.
+        if isinstance(features, dict) and features:
+            _plan["source_features"] = features
+        _plan["src_ip"] = _resolved_src_ip
         asyncio.create_task(_save_response_plan(_plan))
         if _plan.get("auto_execute") and _auto_response_enabled:
             asyncio.create_task(_auto_execute_server_plan(_plan))

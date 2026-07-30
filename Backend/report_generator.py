@@ -238,6 +238,248 @@ MITRE_LOOKUP = {
 
 
 # ---------------------------------------------------------------------------
+# Attack-type-specific remediation playbooks (keyed by lowercase substring).
+# Surfaced in the "Recommended Remediation" section so the report tells the
+# analyst what to DO, not just what happened.
+# ---------------------------------------------------------------------------
+REMEDIATION_LOOKUP = {
+    "portscan": [
+        "Block the source IP at the perimeter firewall and internal ACLs.",
+        "Confirm the scan did not progress to exploitation — review logs on any host whose ports responded.",
+        "Verify only required services/ports are exposed; close or firewall the rest.",
+        "Enable port-scan rate-limiting / SYN-flood protection on edge devices.",
+        "If the source is internal, isolate the host and investigate for compromise.",
+    ],
+    "ddos": [
+        "Engage upstream DDoS scrubbing / rate-limiting at the ISP or CDN.",
+        "Block or rate-limit the offending source ranges; enable SYN cookies.",
+        "Scale or shed load on the targeted service; enable connection caps.",
+        "Preserve NetFlow/packet captures as evidence for the attack window.",
+    ],
+    "dos": [
+        "Rate-limit or block the source generating the flood.",
+        "Enable SYN cookies and connection-rate caps on the target service.",
+        "Monitor resource exhaustion (CPU, sockets, memory) on the endpoint.",
+    ],
+    "ransomware": [
+        "ISOLATE the endpoint from the network immediately to stop encryption spread.",
+        "Do NOT pay; preserve encrypted samples and ransom notes for forensics.",
+        "Identify patient-zero and the initial access vector; hunt for lateral movement.",
+        "Restore from known-good, offline backups after full eradication.",
+        "Rotate all credentials that were valid on the affected host.",
+    ],
+    "malware": [
+        "Quarantine the identified file and kill the associated process.",
+        "Submit the sample hash to threat intel (VirusTotal) for family attribution.",
+        "Scan the host and peers for the same IOC; check persistence mechanisms.",
+        "Reimage if the malware achieved persistence or privilege escalation.",
+    ],
+    "c2": [
+        "Block the C2 destination IP/domain at the firewall and DNS sinkhole it.",
+        "Identify and terminate the beaconing process on the endpoint.",
+        "Hunt for the same C2 indicator across all endpoints.",
+        "Capture the beacon interval and JA3/TLS fingerprint for detection tuning.",
+    ],
+    "beacon": [
+        "Block the C2 destination and sinkhole associated domains.",
+        "Terminate the beaconing process and collect its binary for analysis.",
+        "Correlate the periodic traffic pattern against other hosts.",
+    ],
+    "brute": [
+        "Lock or throttle the targeted account(s); enforce account-lockout policy.",
+        "Block the source IP and require MFA on the exposed service.",
+        "Review authentication logs for a successful login after the attempts.",
+        "Rotate credentials for any account that may have been guessed.",
+    ],
+    "lateral": [
+        "Isolate the source and destination hosts of the lateral movement.",
+        "Disable the abused account/service and rotate its credentials.",
+        "Audit SMB/RDP/WMI exposure and restrict admin-to-admin traffic.",
+    ],
+    "privilege": [
+        "Isolate the host; a privilege-escalation attempt indicates active compromise.",
+        "Identify the exploited vulnerability/CVE and patch it.",
+        "Audit for newly created admin accounts or modified group memberships.",
+    ],
+    "infiltration": [
+        "Isolate the affected host and preserve volatile memory for forensics.",
+        "Trace the initial access vector (phishing, exploit, valid account).",
+        "Hunt for staged payloads, persistence, and outbound exfiltration.",
+    ],
+    "heartbleed": [
+        "Patch the affected OpenSSL version immediately (CVE-2014-0160).",
+        "Rotate all certificates and private keys that were in memory.",
+        "Invalidate active sessions and reset any exposed credentials/secrets.",
+    ],
+    "backdoor": [
+        "Isolate the host and terminate the backdoor process/listener.",
+        "Remove persistence (services, run keys, scheduled tasks) and reimage.",
+        "Rotate credentials and hunt for the same backdoor across the fleet.",
+    ],
+    "exfil": [
+        "Block the outbound destination and cap egress bandwidth for the host.",
+        "Identify what data left the network and its sensitivity.",
+        "Preserve flow records; isolate the host and revoke its credentials.",
+    ],
+    "botnet": [
+        "Block the C2 infrastructure and sinkhole associated domains.",
+        "Identify and clean the bot process; check for worm-like spread.",
+        "Rotate credentials on the infected host after eradication.",
+    ],
+    "insider": [
+        "Preserve the user's session and file/access logs as evidence.",
+        "Review the account's recent access against its normal baseline.",
+        "Engage HR/legal per policy before any account action.",
+        "Restrict access to sensitive resources pending investigation.",
+    ],
+}
+
+_DEFAULT_REMEDIATION = [
+    "Isolate the affected endpoint if active compromise is suspected.",
+    "Preserve logs, flows, and any artifacts for forensic review.",
+    "Block the identified source indicator at the firewall.",
+    "Hunt for the same indicators across the rest of the fleet.",
+    "Escalate to a senior analyst and document the investigation.",
+]
+
+# Human-readable labels + units for the CIC network flow features we surface as
+# evidence. Only present, non-zero values are shown.
+_NETWORK_EVIDENCE_FIELDS = [
+    ("Destination Port",              "Destination Port",        ""),
+    ("Flow Duration",                 "Flow Duration",           "µs"),
+    ("Total Fwd Packets",             "Forward Packets",         ""),
+    ("Total Backward Packets",        "Backward Packets",        ""),
+    ("Total Length of Fwd Packets",   "Fwd Bytes",               "B"),
+    ("Total Length of Bwd Packets",   "Bwd Bytes",               "B"),
+    ("Flow Bytes/s",                  "Flow Throughput",         "B/s"),
+    ("Flow Packets/s",                "Packet Rate",             "pkt/s"),
+    ("Fwd Packets/s",                 "Fwd Packet Rate",         "pkt/s"),
+    ("SYN Flag Count",                "SYN Flags",               ""),
+    ("ACK Flag Count",                "ACK Flags",               ""),
+    ("RST Flag Count",                "RST Flags",               ""),
+    ("FIN Flag Count",                "FIN Flags",               ""),
+    ("PSH Flag Count",                "PSH Flags",               ""),
+    ("Average Packet Size",           "Avg Packet Size",         "B"),
+    ("Down/Up Ratio",                 "Down/Up Ratio",           ""),
+]
+
+
+def _resolve_features(alert: dict, response_plan: dict, contributing: list) -> dict:
+    """Find the richest available network flow feature dict from the alert, the
+    response plan (source_features stashed at plan creation), or a contributing
+    signal. Returns {} when none is present."""
+    for src in (alert.get("source_features"), response_plan.get("source_features"),
+                alert.get("features")):
+        if isinstance(src, dict) and src:
+            return src
+    for sig in (contributing or []):
+        if isinstance(sig, dict) and isinstance(sig.get("features"), dict) and sig["features"]:
+            return sig["features"]
+    return {}
+
+
+def _resolve_src_ip(alert: dict, response_plan: dict, contributing: list) -> str:
+    """Best-effort attacker/source IP from plan, alert, or a contributing signal."""
+    import re as _re
+    for cand in (response_plan.get("src_ip"), alert.get("src_ip"), alert.get("source_ip"),
+                 alert.get("host")):
+        c = str(cand or "").strip()
+        if _re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", c):
+            return c
+    for sig in (contributing or []):
+        if isinstance(sig, dict):
+            c = str(sig.get("src_ip", sig.get("host", "")) or "").strip()
+            if _re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", c):
+                return c
+    return ""
+
+
+def _fmt_num(v) -> str:
+    """Compact numeric formatting: ints plain, large numbers with separators."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if f == int(f):
+        return f"{int(f):,}"
+    if abs(f) >= 1000:
+        return f"{f:,.0f}"
+    return f"{f:.2f}"
+
+
+def _remediation_steps(attack_type: str, mitre: str) -> list:
+    """Resolve attack-type-specific remediation steps by keyword match."""
+    key = (str(attack_type) + " " + str(mitre)).lower()
+    for token, steps in REMEDIATION_LOOKUP.items():
+        if token in key:
+            return steps
+    return _DEFAULT_REMEDIATION
+
+
+def _build_narrative_text(
+    attack_type: str, severity: str, score: float, src_ip: str,
+    target: str, features: dict,
+) -> str:
+    """Compose a plain-English incident narrative from the available signals."""
+    attack = attack_type or "suspicious activity"
+    sev = (severity or "UNKNOWN").upper()
+    src = src_ip or "an unidentified source"
+    tgt = target or "the monitored endpoint"
+    dport = ""
+    try:
+        dp = int(float(features.get("Destination Port", 0)))
+        if dp > 0:
+            dport = str(dp)
+    except (TypeError, ValueError):
+        pass
+
+    parts = [
+        f"Cyber Sentinel XDR detected a <b>{attack}</b> event classified "
+        f"<b>{sev}</b> with a fused threat score of <b>{score * 100:.0f}/100</b>. "
+        f"The activity originated from <b>{src}</b> and targeted <b>{tgt}</b>"
+        + (f" on port <b>{dport}</b>." if dport else "."),
+    ]
+    a = attack.lower()
+    if "portscan" in a or "port scan" in a:
+        parts.append(
+            "The traffic pattern — many short-lived connections probing multiple "
+            "ports/hosts from a single source — is characteristic of reconnaissance "
+            "(MITRE T1046). Port scanning frequently precedes targeted exploitation, "
+            "so this source should be treated as hostile until proven otherwise."
+        )
+    elif "ddos" in a or "dos" in a:
+        parts.append(
+            "A high-volume flood of traffic aimed at exhausting network or endpoint "
+            "resources was observed, consistent with a denial-of-service attempt.")
+    elif "ransomware" in a:
+        parts.append(
+            "The combination of malicious file activity and abnormal system behaviour "
+            "matches ransomware tradecraft. Immediate isolation is critical to prevent "
+            "encryption from spreading to shared drives and peers.")
+    elif "malware" in a:
+        parts.append(
+            "A binary matching malicious characteristics was identified on the host. "
+            "Confirm containment and hunt for the same indicator across the fleet.")
+    elif "c2" in a or "beacon" in a:
+        parts.append(
+            "Periodic outbound traffic consistent with command-and-control beaconing "
+            "was observed, indicating a host may already be compromised.")
+    elif "brute" in a:
+        parts.append(
+            "Repeated authentication attempts against an account were detected, "
+            "consistent with a credential brute-force attack.")
+    else:
+        parts.append(
+            "The correlated signals across detection domains raised this event above "
+            "the alerting threshold and warrant analyst review.")
+    parts.append(
+        "Automated response actions were generated to contain the threat (see the "
+        "Response Actions section); recommended manual remediation follows in the "
+        "Recommended Remediation section.")
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Constants that are always available (regardless of reportlab)
 # ---------------------------------------------------------------------------
 # Prefer XDR_REPORTS_DIR env var (set via config.py / .env); fall back to the
@@ -603,28 +845,67 @@ def _build_header(styles, incident_id: str, generated_at: str) -> list:
     return elements
 
 
-def _build_incident_summary(styles, incident_id: str, alert: dict, endpoint_info: dict) -> list:
+def _build_incident_summary(
+    styles, incident_id: str, alert: dict, endpoint_info: dict,
+    response_plan: dict | None = None, contributing: list | None = None,
+) -> list:
     elements = []
     elements.append(Paragraph("1 — Incident Summary", styles["section"]))
     elements.append(Spacer(1, 2 * mm))
 
+    response_plan = response_plan or {}
+    contributing = contributing or []
     severity = str(alert.get("severity", "UNKNOWN")).upper()
     sev_colour = _severity_badge_colour(severity)
     attack_type = str(alert.get("attack_type", alert.get("attack", "Unknown")))
     ts = str(alert.get("ts", alert.get("timestamp", alert.get("created_at", "N/A"))))
+    if "T" in ts:
+        ts = ts.replace("T", " ")[:19] + " UTC"
     hostname = str(endpoint_info.get("hostname", alert.get("endpoint_id", "N/A")))
     ip_address = str(endpoint_info.get("ip_address", "N/A"))
     threat_score = float(alert.get("threat_score", 0.0))
 
+    src_ip = _resolve_src_ip(alert, response_plan, contributing) or "N/A (internal correlation)"
+    features = _resolve_features(alert, response_plan, contributing)
+    # Detection domains (which model layers contributed)
+    sources = (alert.get("sources") or response_plan.get("sources")
+               or alert.get("contributing_signals") or [])
+    domains = sorted({str(s.get("source") if isinstance(s, dict) else s).lower()
+                      for s in sources if s}) if sources else []
+    domain_str = ", ".join(d for d in domains if d) or "network"
+    # Detection method
+    n_signals = len(contributing) if contributing else len(sources)
+    if len(domains) >= 2:
+        method = f"Multi-domain correlation ({n_signals} signals)"
+    elif "network" in domain_str:
+        method = "Network flow analysis (rule + ML classifier)"
+    else:
+        method = f"{domain_str.title()} model detection"
+    target_port = ""
+    try:
+        dp = int(float(features.get("Destination Port", 0)))
+        if dp > 0:
+            target_port = str(dp)
+    except (TypeError, ValueError):
+        pass
+
     data = [
         ["Field", "Value"],
-        ["Incident ID",      incident_id],
-        ["Timestamp",        ts],
-        ["Severity",         severity],
-        ["Attack Type",      attack_type],
-        ["Threat Score",     f"{threat_score * 100:.1f} / 100"],
-        ["Endpoint",         hostname],
-        ["IP Address",       ip_address],
+        ["Incident ID",       incident_id],
+        ["Timestamp",         ts],
+        ["Severity",          severity],
+        ["Attack Type",       attack_type],
+        ["Threat Score",      f"{threat_score * 100:.1f} / 100"],
+        ["Target Endpoint",   hostname],
+        ["Target IP",         ip_address],
+        ["Source / Attacker IP", src_ip],
+    ]
+    if target_port:
+        data.append(["Targeted Port", target_port])
+    data += [
+        ["Detection Domains", domain_str],
+        ["Detection Method",  method],
+        ["MITRE Technique",   str(response_plan.get("mitre_technique", "N/A")) or "N/A"],
     ]
 
     col_widths = [55 * mm, 115 * mm]
@@ -670,7 +951,7 @@ def _build_attack_timeline(
     Severity, Confidence, and Detail are never hard-coded or empty.
     """
     elements = []
-    elements.append(Paragraph("2 — Attack Timeline", styles["section"]))
+    elements.append(Paragraph("3 — Attack Timeline", styles["section"]))
     elements.append(Spacer(1, 2 * mm))
 
     if not contributing_signals:
@@ -710,23 +991,21 @@ def _build_attack_timeline(
             s = s.replace("T", " ")[:19]
         return s
 
-    data = [["#", "Source", "Timestamp", "Severity", "Confidence", "Detail"]]
-    for idx, sig in enumerate(sorted_signals, start=1):
+    # Build normalised rows first, then collapse duplicates. Contributing signals
+    # from a single detection cycle are often identical (e.g. three PortScan flow
+    # samples) — showing three identical rows adds no information, so identical
+    # rows are merged and annotated with an occurrence count.
+    built: list = []
+    for sig in sorted_signals:
         if not isinstance(sig, dict):
-            # Plain string — the signal IS the source name
             source_str = str(sig)
-            # Try to find a richer source label from the plan's sources list
-            if _plan_sources:
-                joined = ", ".join(str(s) for s in _plan_sources)
-            else:
-                joined = source_str
+            joined = ", ".join(str(s) for s in _plan_sources) if _plan_sources else source_str
             row_source   = _truncate(joined, 20)
             row_ts       = _fmt_ts(_fallback_ts)
             row_severity = _fallback_severity
             row_conf     = f"{_fallback_conf:.2f}"
             row_detail   = _truncate(_fallback_attack, 40)
         else:
-            # Rich signal dict — read directly, fall back to alert-level values
             source_raw = sig.get("source", sig.get("sources"))
             if isinstance(source_raw, list):
                 source_raw = ", ".join(str(s) for s in source_raw)
@@ -742,8 +1021,27 @@ def _build_attack_timeline(
                 sig.get("prediction", sig.get("detail", sig.get("attack_type", _fallback_attack))),
                 40,
             )
+        built.append((row_source, row_ts, row_severity, row_conf, row_detail))
 
-        data.append([str(idx), row_source, row_ts, row_severity, row_conf, row_detail])
+    # Collapse identical rows (same source/severity/confidence/detail), keeping
+    # the earliest timestamp and counting occurrences.
+    merged: list = []
+    counts: dict = {}
+    for r in built:
+        key = (r[0], r[2], r[3], r[4])  # source, severity, conf, detail
+        if key in counts:
+            idx_pos = counts[key]
+            merged[idx_pos] = (merged[idx_pos][0], min(merged[idx_pos][1], r[1]),
+                               merged[idx_pos][2], merged[idx_pos][3], merged[idx_pos][4],
+                               merged[idx_pos][5] + 1)
+        else:
+            counts[key] = len(merged)
+            merged.append((r[0], r[1], r[2], r[3], r[4], 1))
+
+    data = [["#", "Source", "Timestamp", "Severity", "Confidence", "Detail"]]
+    for idx, (m_src, m_ts, m_sev, m_conf, m_detail, m_n) in enumerate(merged, start=1):
+        detail = m_detail + (f"  (x{m_n} flows)" if m_n > 1 else "")
+        data.append([str(idx), m_src, m_ts, m_sev, m_conf, detail])
 
     # Column widths (points): #=20, Source=55, Timestamp=130, Severity=55,
     # Confidence=55, Detail=125  → total 440pt ≈ letter-page usable width.
@@ -759,6 +1057,140 @@ def _build_attack_timeline(
     style.add("VALIGN",    (0, 0), (-1, -1), "TOP")
     table.setStyle(style)
     elements.append(table)
+    elements.append(Spacer(1, 4 * mm))
+    return elements
+
+
+def _build_narrative_section(
+    styles, section_no: str, alert: dict, response_plan: dict, contributing: list,
+) -> list:
+    """Plain-English incident narrative — what happened, who, and why it matters."""
+    elements = []
+    elements.append(Paragraph(f"{section_no} — Attack Narrative", styles["section"]))
+    elements.append(Spacer(1, 2 * mm))
+
+    attack_type = str(alert.get("attack_type", response_plan.get("attack_type", "Unknown")))
+    severity = str(alert.get("severity", response_plan.get("severity", "UNKNOWN")))
+    try:
+        score = float(alert.get("threat_score", response_plan.get("threat_score", 0.0)))
+    except (TypeError, ValueError):
+        score = 0.0
+    src_ip = _resolve_src_ip(alert, response_plan, contributing)
+    target = str(alert.get("endpoint_id", response_plan.get("endpoint_id", "the endpoint")))
+    features = _resolve_features(alert, response_plan, contributing)
+
+    text = _build_narrative_text(attack_type, severity, score, src_ip, target, features)
+    elements.append(Paragraph(text, styles["body"]))
+    elements.append(Spacer(1, 4 * mm))
+    return elements
+
+
+def _build_detection_evidence(
+    styles, section_no: str, alert: dict, response_plan: dict, contributing: list,
+) -> list:
+    """Technical evidence table built from the raw network flow feature vector.
+    Only present, non-zero fields are shown; skipped entirely when no flow data
+    is available (e.g. a pure system/user correlation)."""
+    features = _resolve_features(alert, response_plan, contributing)
+    rows = []
+    for key, label, unit in _NETWORK_EVIDENCE_FIELDS:
+        if key not in features:
+            continue
+        try:
+            val = float(features.get(key))
+        except (TypeError, ValueError):
+            continue
+        if val == 0.0:
+            continue
+        disp = _fmt_num(val) + (f" {unit}" if unit else "")
+        rows.append([label, disp])
+
+    elements = []
+    elements.append(Paragraph(f"{section_no} — Detection Details & Network Evidence", styles["section"]))
+    elements.append(Spacer(1, 2 * mm))
+    if not rows:
+        elements.append(Paragraph(
+            "No network flow evidence is associated with this incident (it was raised "
+            "by system/user/host-behaviour correlation rather than a network flow).",
+            styles["body"],
+        ))
+        elements.append(Spacer(1, 4 * mm))
+        return elements
+    elements.append(Paragraph(
+        "The following flow-level measurements were extracted from the traffic that "
+        "triggered this detection and form the technical basis of the verdict.",
+        styles["body"],
+    ))
+    elements.append(Spacer(1, 2 * mm))
+
+    data = [["Flow Attribute", "Observed Value"]] + rows
+    table = Table(data, colWidths=[85 * mm, 85 * mm], repeatRows=1)
+    style = TableStyle(list(_TABLE_HEADER_STYLE._cmds))
+    style.add("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold")
+    style.add("TEXTCOLOR", (0, 1), (0, -1), _MID_BLUE)
+    table.setStyle(style)
+    elements.append(table)
+    elements.append(Spacer(1, 4 * mm))
+    return elements
+
+
+def _build_iocs(
+    styles, section_no: str, alert: dict, response_plan: dict, contributing: list,
+    mitre_technique: str,
+) -> list:
+    """Indicators of Compromise — the actionable artifacts an analyst can block/hunt."""
+    src_ip = _resolve_src_ip(alert, response_plan, contributing)
+    features = _resolve_features(alert, response_plan, contributing)
+    attack_type = str(alert.get("attack_type", response_plan.get("attack_type", "Unknown")))
+
+    rows = []
+    if src_ip:
+        rows.append(["Source IPv4", src_ip, "Block at firewall; hunt across fleet"])
+    try:
+        dp = int(float(features.get("Destination Port", 0)))
+        if dp > 0:
+            rows.append(["Destination Port", str(dp), "Verify service exposure"])
+    except (TypeError, ValueError):
+        pass
+    if attack_type and attack_type.lower() != "unknown":
+        rows.append(["Attack Signature", attack_type, "Detection pattern"])
+    if mitre_technique:
+        rows.append(["MITRE Technique", mitre_technique, "ATT&CK reference"])
+
+    elements = []
+    elements.append(Paragraph(f"{section_no} — Indicators of Compromise (IOCs)", styles["section"]))
+    elements.append(Spacer(1, 2 * mm))
+    if not rows:
+        elements.append(Paragraph(
+            "No discrete network IOCs were extracted for this incident.", styles["body"]))
+        elements.append(Spacer(1, 4 * mm))
+        return elements
+    data = [["Type", "Indicator", "Analyst Action"]] + rows
+    table = Table(data, colWidths=[42 * mm, 68 * mm, 60 * mm], repeatRows=1)
+    style = TableStyle(list(_TABLE_HEADER_STYLE._cmds))
+    style.add("FONTNAME", (1, 1), (1, -1), "Courier-Bold")
+    table.setStyle(style)
+    elements.append(table)
+    elements.append(Spacer(1, 4 * mm))
+    return elements
+
+
+def _build_remediation(
+    styles, section_no: str, attack_type: str, mitre_technique: str,
+) -> list:
+    """Attack-type-specific recommended remediation steps."""
+    steps = _remediation_steps(attack_type, mitre_technique)
+    elements = []
+    elements.append(Paragraph(f"{section_no} — Recommended Remediation", styles["section"]))
+    elements.append(Spacer(1, 2 * mm))
+    elements.append(Paragraph(
+        f"Recommended manual actions for a <b>{attack_type or 'threat'}</b> incident, "
+        "in priority order:",
+        styles["body"],
+    ))
+    elements.append(Spacer(1, 1 * mm))
+    for i, step in enumerate(steps, start=1):
+        elements.append(Paragraph(f"<b>{i}.</b> {step}", styles["body"]))
     elements.append(Spacer(1, 4 * mm))
     return elements
 
@@ -782,7 +1214,7 @@ def _normalise_shap_items(shap_explanation) -> list:
 def _build_shap_section(styles, shap_explanation: list) -> list:
     """Section 3 — SHAP Explanation: visual bar chart + detail table."""
     elements = []
-    elements.append(Paragraph("3 — SHAP Explanation", styles["section"]))
+    elements.append(Paragraph("7 — SHAP Explanation", styles["section"]))
     elements.append(Spacer(1, 2 * mm))
 
     items = _normalise_shap_items(shap_explanation)
@@ -852,7 +1284,7 @@ def _build_mitre_section(styles, mitre_technique: str, severity: str) -> list:
     Falls back gracefully when the technique ID is not in MITRE_LOOKUP.
     """
     elements = []
-    elements.append(Paragraph("2b — MITRE ATT&amp;CK Mapping", styles["section"]))
+    elements.append(Paragraph("5 — MITRE ATT&amp;CK Mapping", styles["section"]))
     elements.append(Spacer(1, 2 * mm))
 
     tech_id = str(mitre_technique or "").strip().upper()
@@ -920,7 +1352,7 @@ def _build_mitre_section(styles, mitre_technique: str, severity: str) -> list:
 
 def _build_response_actions(styles, response_plan: dict, execution_results: list) -> list:
     elements = []
-    elements.append(Paragraph("4 — Response Actions", styles["section"]))
+    elements.append(Paragraph("8 — Response Actions", styles["section"]))
     elements.append(Spacer(1, 2 * mm))
 
     recommended = response_plan.get("recommended_actions", [])
@@ -1084,7 +1516,7 @@ def _build_final_status(styles, execution_results: list, response_plan: dict) ->
 
     # KeepTogether prevents the section heading from splitting from the verdict box
     elements.append(KeepTogether([
-        Paragraph("5 — Final Status", styles["section"]),
+        Paragraph("10 — Final Status", styles["section"]),
         Spacer(1, 5 * mm),
         verdict_table,
     ]))
@@ -1153,7 +1585,7 @@ def _build_analyst_certification(
     a signature line, and a coloured CERTIFIED stamp.
     """
     elements = []
-    elements.append(Paragraph("6 — Analyst Certification", styles["section"]))
+    elements.append(Paragraph("11 — Analyst Certification", styles["section"]))
     elements.append(Spacer(1, 3 * mm))
     elements.append(HRFlowable(width="100%", thickness=0.8, color=_BORDER_GREY))
     elements.append(Spacer(1, 3 * mm))
@@ -1364,22 +1796,35 @@ def generate_incident_report(
     # Page 1 — Header
     story += _build_header(styles, incident_id, generated_at)
 
-    # Section 1 — Incident Summary
-    story += _build_incident_summary(styles, incident_id, alert, endpoint_info)
-
-    # Section 2 — Attack Timeline
     contributing = (
         alert.get("contributing_signals")
         or response_plan.get("contributing_signals")
         or alert.get("sources")
         or []
     )
+    attack_type = str(alert.get("attack_type", response_plan.get("attack_type", "Unknown")))
+
+    # Section 1 — Incident Summary (enriched: attacker IP, target port, domains)
+    story += _build_incident_summary(
+        styles, incident_id, alert, endpoint_info, response_plan, contributing
+    )
+
+    # Section 2 — Attack Narrative (plain-English story of the incident)
+    story += _build_narrative_section(styles, "2", alert, response_plan, contributing)
+
+    # Section 3 — Attack Timeline
     story += _build_attack_timeline(styles, contributing, alert=alert, response_plan=response_plan)
 
-    # Section 2b — MITRE ATT&CK Mapping
+    # Section 4 — Detection Details & Network Evidence (from raw flow features)
+    story += _build_detection_evidence(styles, "4", alert, response_plan, contributing)
+
+    # Section 5 — MITRE ATT&CK Mapping
     story += _build_mitre_section(styles, mitre_technique, severity)
 
-    # Section 3 — SHAP Explanation (visual bar chart + detail table)
+    # Section 6 — Indicators of Compromise
+    story += _build_iocs(styles, "6", alert, response_plan, contributing, mitre_technique)
+
+    # Section 7 — SHAP Explanation (visual bar chart + detail table)
     shap_data = (
         alert.get("shap_explanation")
         or alert.get("shap")
@@ -1388,13 +1833,16 @@ def generate_incident_report(
     )
     story += _build_shap_section(styles, shap_data)
 
-    # Section 4 — Response Actions
+    # Section 8 — Response Actions
     story += _build_response_actions(styles, response_plan, execution_results)
 
-    # Section 5 — Final Status
+    # Section 9 — Recommended Remediation (attack-type-specific playbook)
+    story += _build_remediation(styles, "9", attack_type, mitre_technique)
+
+    # Section 10 — Final Status
     story += _build_final_status(styles, execution_results, response_plan)
 
-    # Section 6 — Analyst Certification
+    # Section 11 — Analyst Certification
     story += _build_analyst_certification(
         styles, admin_name, admin_role, generated_at, severity
     )
