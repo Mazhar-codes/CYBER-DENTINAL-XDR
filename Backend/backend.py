@@ -3198,6 +3198,30 @@ async def submit_feedback(request: Request, payload: dict = Body(...)):
             status_code=400,
             detail="verdict must be one of: false_positive, true_positive, benign",
         )
+    # Resolve the raw feature vector for retraining. Prefer an inline snapshot
+    # from the caller; otherwise look it up server-side from the response plan
+    # (reference_id == plan_id), which stashed `source_features` at creation.
+    # This is what makes a label "retrain-ready" (see retrain_from_feedback.py).
+    _ref = str(payload.get("reference_id", "")).strip()
+    _resolved_features = payload.get("features")
+    _feat_source = "payload" if isinstance(_resolved_features, dict) and _resolved_features else "none"
+    _plan_src_ip = ""
+    if _feat_source == "none" and _ref and MONGO_OK and _db is not None:
+        try:
+            _plan_doc = await asyncio.to_thread(
+                lambda: _db["response_plans"].find_one(
+                    {"plan_id": _ref},
+                    {"source_features": 1, "src_ip": 1, "attack_type": 1, "severity": 1},
+                )
+            )
+            if _plan_doc:
+                if isinstance(_plan_doc.get("source_features"), dict) and _plan_doc["source_features"]:
+                    _resolved_features = _plan_doc["source_features"]
+                    _feat_source = "plan"
+                _plan_src_ip = str(_plan_doc.get("src_ip", "") or "")
+        except Exception as _rf_exc:
+            logger.debug(f"feedback feature resolution failed: {_rf_exc}")
+
     doc = {
         "feedback_id":  _uuid.uuid4().hex,
         "verdict":      verdict,
@@ -3206,9 +3230,11 @@ async def submit_feedback(request: Request, payload: dict = Body(...)):
         "attack_type":  str(payload.get("attack_type", "")),
         "severity":     str(payload.get("severity", "")),
         "endpoint_id":  str(payload.get("endpoint_id", "")),
-        "reference_id": str(payload.get("reference_id", "")),   # alert / plan / incident id
+        "reference_id": _ref,                                   # alert / plan / incident id
+        "src_ip":       str(payload.get("src_ip", "") or _plan_src_ip),
         "score":        payload.get("score"),
-        "features":     payload.get("features"),                # optional snapshot for retraining
+        "features":     _resolved_features,                     # feature snapshot for retraining
+        "feature_source": _feat_source,                         # payload | plan | none
         "reason":       str(payload.get("reason", ""))[:500],
         "analyst":      username,
         "ip":           ip,
@@ -4651,6 +4677,19 @@ async def _emit_soc_alert_if_correlated(fe_out: dict, ts: str) -> None:
                 "sources":              correlation.get("involved_sources", []),
                 "src_ip":               _src_ip,
             })
+            # Stash the raw network flow feature vector (and attacker IP) on the
+            # plan so analyst FP/TP feedback on this alert can be resolved
+            # server-side into a retrain-ready sample. See POST /feedback and
+            # retrain_from_feedback.py. First network alert in the batch wins.
+            _src_features: dict = {}
+            for _alert in fe_out.get("alerts", []):
+                _f = _alert.get("features")
+                if isinstance(_f, dict) and _f:
+                    _src_features = _f
+                    break
+            if _src_features:
+                _plan["source_features"] = _src_features
+            _plan["src_ip"] = _src_ip
             asyncio.create_task(_save_response_plan(_plan))
             if _plan.get("auto_execute") and _auto_response_enabled:
                 asyncio.create_task(_auto_execute_server_plan(_plan))
