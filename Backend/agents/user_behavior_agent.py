@@ -611,19 +611,29 @@ class UserBehaviorAgent:
             elif session_count == max_sess:
                 rule_score += excess_w / 2.0
 
-            # Factor 3 — configurable after-hours window (single window drives
-            # both the compound rule below and the model's after_hours feature).
+            # Factor 3 — configurable after-hours window. A session counts as
+            # after-hours activity if EITHER (a) the user logged in during the
+            # after-hours window (a suspicious off-hours logon — e.g. 3 AM), OR
+            # (b) the session is active *right now* and the current wall-clock
+            # time is outside business hours (after-hours activity on a session
+            # that may have started earlier). Both use the same configurable
+            # window; (b) is what makes an ongoing session flag once the clock
+            # passes the configured end hour.
+            _now_local = datetime.now()
+            now_after_hours = _is_after_hours(_now_local)
             for session in sessions:
+                session_after_hours = now_after_hours
                 started = session.get("started", "")
-                if not started:
-                    continue
-                try:
-                    dt = datetime.strptime(str(started), "%Y-%m-%d %H:%M:%S")
-                    if _is_after_hours(dt):
-                        unusual_hours_detected = True
-                        after_hours_count += 1
-                except (ValueError, TypeError):
-                    pass
+                if started:
+                    try:
+                        dt = datetime.strptime(str(started), "%Y-%m-%d %H:%M:%S")
+                        if _is_after_hours(dt):
+                            session_after_hours = True
+                    except (ValueError, TypeError):
+                        pass
+                if session_after_hours:
+                    unusual_hours_detected = True
+                    after_hours_count += 1
 
             # Standalone after-hours contribution (0 by default; admins raise it
             # to make off-hours logons meaningful on their own).
