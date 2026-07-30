@@ -47,6 +47,14 @@ class HybridDetector:
                 os.path.join(self.base_dir, "network_label_encoder.pkl")
             )
             self.cic_features = joblib.load(os.path.join(self.base_dir, "network_features.pkl"))
+            # Force single-threaded inference — n_jobs=8 spins up a joblib
+            # ThreadingBackend on every predict; with frequent small real-time
+            # batches that thrashes the CPU and hangs the server. n_jobs=1 gives
+            # identical predictions in milliseconds. (Detection is unchanged.)
+            try:
+                self.cic_classifier.n_jobs = 1
+            except Exception:
+                pass
             self.has_cic = True
             logger.info(
                 "✅ CIC classifier loaded — classes: %s",
@@ -67,12 +75,20 @@ class HybridDetector:
             self.iso_features = joblib.load(
                 os.path.join(self.base_dir, "network_features.pkl")
             )
+            try:
+                self.iso_model.n_jobs = 1
+            except Exception:
+                pass
 
         # ── Personal baseline model (YOUR normal traffic) ──────────────────
         personal_path = os.path.join(self.base_dir, "personal_baseline_model.pkl")
         if os.path.exists(personal_path):
             artifacts = joblib.load(personal_path)
             self.personal_model = artifacts["model"]
+            try:
+                self.personal_model.n_jobs = 1
+            except Exception:
+                pass
             self.personal_scaler = artifacts["scaler"]
             self.personal_threshold = artifacts["threshold"]
             self.personal_features = artifacts["features"]

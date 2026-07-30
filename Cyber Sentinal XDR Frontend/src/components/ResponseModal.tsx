@@ -362,6 +362,27 @@ export default function ResponseModal({ alert, plan: initialPlan, onClose, onExe
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
+  // ── Analyst feedback (Feature #1: FP/TP labeling for retraining corpus) ──────
+  const [feedbackSent, setFeedbackSent] = useState<string | null>(null);
+  const submitFeedback = useCallback(async (verdict: "false_positive" | "true_positive") => {
+    if (!plan && !alert) return;
+    try {
+      await authAxios.post(`${BACKEND_URL}/feedback`, {
+        verdict,
+        model: "fusion",
+        alert_type: plan?.attack_type ?? alert?.attack_type ?? "",
+        attack_type: plan?.attack_type ?? alert?.attack_type ?? "",
+        severity: plan?.severity ?? alert?.severity ?? "",
+        endpoint_id: plan?.endpoint_id ?? alert?.src_ip ?? "",
+        reference_id: plan?.plan_id ?? "",
+        score: alert?.confidence ?? null,
+      });
+      setFeedbackSent(verdict);
+    } catch {
+      setFeedbackSent("error");
+    }
+  }, [plan, alert]);
+
   // ── Execute handler ───────────────────────────────────────────────────────────
   const handleExecute = useCallback(async () => {
     if (!plan || !canExecute) return;
@@ -1013,6 +1034,47 @@ export default function ResponseModal({ alert, plan: initialPlan, onClose, onExe
                 >
                   View Only — Contact Admin to Execute Response
                 </div>
+              )}
+
+              {/* Analyst feedback — labels this alert for the retraining corpus */}
+              {canExecute && (
+                feedbackSent ? (
+                  <span style={{
+                    fontSize: 12, fontWeight: 700, letterSpacing: 0.4,
+                    color: feedbackSent === "error" ? "var(--accent-red)" : "var(--accent-green)",
+                  }}>
+                    {feedbackSent === "error" ? "Feedback failed — retry"
+                      : feedbackSent === "false_positive" ? "✓ Marked False Positive"
+                      : "✓ Confirmed Threat"}
+                  </span>
+                ) : (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => submitFeedback("false_positive")}
+                      title="Record this alert as a false positive (labels data for model retraining)"
+                      style={{
+                        padding: "9px 14px", borderRadius: 10,
+                        border: "1px solid rgba(245,158,11,0.55)", background: "transparent",
+                        color: "var(--accent-amber)", fontWeight: 700, fontSize: 12,
+                        cursor: "pointer", letterSpacing: 0.4,
+                      }}
+                    >
+                      ✗ False Positive
+                    </button>
+                    <button
+                      onClick={() => submitFeedback("true_positive")}
+                      title="Confirm this is a real threat (labels data for model retraining)"
+                      style={{
+                        padding: "9px 14px", borderRadius: 10,
+                        border: "1px solid rgba(16,185,129,0.55)", background: "transparent",
+                        color: "var(--accent-green)", fontWeight: 700, fontSize: 12,
+                        cursor: "pointer", letterSpacing: 0.4,
+                      }}
+                    >
+                      ✓ Confirm Threat
+                    </button>
+                  </div>
+                )
               )}
 
               <button

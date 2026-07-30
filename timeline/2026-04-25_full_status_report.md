@@ -81,7 +81,7 @@ addressed before any production deployment.
 
 **CRED-01 — MongoDB Atlas credentials in source code**
 - Description: `config.py` line 54 hardcodes a full Atlas SRV URI including
-  username (`<REDACTED_DB_USER>`) and password (`<REDACTED>`) as the
+  username (`annashabib02283_db_user`) and password (`5sJ6ZzdQg3rT2Zy2`) as the
   fallback default when `MONGO_URI` env var is unset.
 - Impact: Any team member or CI system that clones this repo gets database
   write access. If the repo is ever made public (e.g., for a portfolio/demo),

@@ -626,6 +626,57 @@ export default function NetworkMonitor() {
       const targetStr = data.target ? ` [${data.target}]` : "";
       const isCompleted = data.success || data.status === "completed";
 
+      // ── Distinct, prominent alert for ACCOUNT LOCKOUTS (insider-threat response) ──
+      if (data.action === "lock_account") {
+        const advisory = /advisory/i.test(resultMsg);
+        if (advisory) {
+          // Server self-guard / unresolved target — safe skip, not a real lockout
+          toast(`🛡️ Lock Account (advisory) — ${hostname}: ${resultMsg.slice(0, 100)}`, {
+            id: `lock-${data.endpoint_id}-${data.target}`,
+            duration: 8000,
+            position: "top-center",
+            style: {
+              background: "var(--bg-sidebar)",
+              color: "#f59e0b",
+              border: "1px solid rgba(245,158,11,0.5)",
+              borderRadius: 10,
+              fontFamily: "'Fira Code', monospace",
+              fontSize: 13,
+              fontWeight: 700,
+              padding: "12px 18px",
+              boxShadow: "0 0 22px rgba(245,158,11,0.3)",
+              maxWidth: 520,
+            },
+            icon: "ⓘ",
+          });
+          return;
+        }
+        if (isCompleted) {
+          // Real lockout executed on an endpoint — headline SOC event
+          toast(`🔒 USER SIGNED OUT — ${data.target ?? "account"} locked on ${hostname}`, {
+            id: `lock-${data.endpoint_id}-${data.target}`,
+            duration: 10000,
+            position: "top-center",
+            style: {
+              background: "#b91c1c",
+              color: "#ffffff",
+              border: "2px solid #ff6b6b",
+              borderRadius: 12,
+              fontFamily: "'Fira Code', monospace",
+              fontSize: 14,
+              fontWeight: 800,
+              letterSpacing: 0.4,
+              padding: "16px 24px",
+              boxShadow: "0 0 34px rgba(220,38,38,0.65)",
+              maxWidth: 560,
+            },
+            icon: "🚫",
+          });
+          return;
+        }
+        // failed lockout falls through to the generic error toast below
+      }
+
       if (isCompleted) {
         toast.success(`${actionLabel}${targetStr} completed on ${hostname}`, {
           duration: 6000,

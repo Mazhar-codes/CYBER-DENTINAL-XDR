@@ -1327,6 +1327,10 @@ async def _do_startup():
             _db["case_notes"].create_index("analyst", background=True)
             # note_id unique lookup (used by DELETE /case-notes/{note_id})
             _db["case_notes"].create_index("note_id", unique=True, background=True)
+            # feedback — analyst FP/TP labels (Feature #1); export corpus for retraining
+            _db["feedback"].create_index([("created_at", DESCENDING)], background=True)
+            _db["feedback"].create_index("verdict", background=True)
+            _db["feedback"].create_index("used_in_training", background=True)
             logger.info("MongoDB settings/case_notes indexes created/verified")
         except Exception as _sc_idx_err:
             logger.warning(f"MongoDB settings/case_notes index creation skipped: {_sc_idx_err}")
@@ -3176,6 +3180,87 @@ async def log_client_audit_event(request: Request, payload: dict = Body(...)):
             pass
     await sio.emit("audit_event", doc)
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Analyst feedback labeling (false-positive / true-positive) — Feature #1
+# Records analyst verdicts as a labeled corpus for periodic OFFLINE retraining.
+# ADDITIVE: never modifies a running model; retraining is a separate, gated step.
+# ---------------------------------------------------------------------------
+@app.post("/feedback", dependencies=[Depends(_require_key_or_jwt)])
+async def submit_feedback(request: Request, payload: dict = Body(...)):
+    """Record an analyst verdict on an alert (false_positive / true_positive / benign)."""
+    username = _jwt_sub_from_request(request) or "api_key"
+    ip = request.client.host if request.client else "unknown"
+    verdict = str(payload.get("verdict", "")).lower().strip()
+    if verdict not in ("false_positive", "true_positive", "benign"):
+        raise HTTPException(
+            status_code=400,
+            detail="verdict must be one of: false_positive, true_positive, benign",
+        )
+    doc = {
+        "feedback_id":  _uuid.uuid4().hex,
+        "verdict":      verdict,
+        "model":        str(payload.get("model", "")),          # network|user|system|malware|fusion
+        "alert_type":   str(payload.get("alert_type", "")),
+        "attack_type":  str(payload.get("attack_type", "")),
+        "severity":     str(payload.get("severity", "")),
+        "endpoint_id":  str(payload.get("endpoint_id", "")),
+        "reference_id": str(payload.get("reference_id", "")),   # alert / plan / incident id
+        "score":        payload.get("score"),
+        "features":     payload.get("features"),                # optional snapshot for retraining
+        "reason":       str(payload.get("reason", ""))[:500],
+        "analyst":      username,
+        "ip":           ip,
+        "created_at":   _now(),
+        "ts_dt":        _now_dt(),
+        "used_in_training": False,
+    }
+    if MONGO_OK and _db is not None:
+        try:
+            await asyncio.to_thread(lambda: _db["feedback"].insert_one({**doc}))
+        except Exception as _fe:
+            logger.error(f"feedback insert failed: {_fe}")
+            raise HTTPException(status_code=503, detail="feedback store unavailable")
+    _audit = {
+        "user": username, "action": "alert_feedback", "timestamp": _now(),
+        "status": "success", "ip": ip,
+        "detail": f"{verdict} on {doc['model'] or doc['alert_type'] or 'alert'}"
+                  + (f" ({doc['attack_type']})" if doc['attack_type'] else ""),
+    }
+    if MONGO_OK and _db is not None:
+        asyncio.create_task(asyncio.to_thread(lambda: _db["audit_logs"].insert_one({**_audit})))
+    await sio.emit("audit_event", _audit)
+    await sio.emit("feedback_recorded", {
+        k: doc[k] for k in
+        ("feedback_id", "verdict", "model", "attack_type", "endpoint_id", "analyst", "created_at")
+    })
+    return {"status": "ok", "feedback_id": doc["feedback_id"], "verdict": verdict}
+
+
+@app.get("/feedback", dependencies=[Depends(_require_key_or_jwt)])
+async def list_feedback(limit: int = 100, skip: int = 0, verdict: str = ""):
+    """List recorded analyst feedback, newest first (for review + retraining export)."""
+    if not (MONGO_OK and _db is not None):
+        return {"feedback": [], "total": 0, "counts": {}}
+    limit = max(1, min(int(limit), 500))
+    skip = max(0, int(skip))
+    query: dict = {}
+    if verdict:
+        query["verdict"] = verdict.lower().strip()
+    try:
+        total = await asyncio.to_thread(lambda: _db["feedback"].count_documents(query))
+        docs = await asyncio.to_thread(lambda: list(
+            _db["feedback"].find(query, {"_id": 0}).sort("_id", DESCENDING).skip(skip).limit(limit)
+        ))
+        counts = {
+            v: await asyncio.to_thread(lambda _v=v: _db["feedback"].count_documents({"verdict": _v}))
+            for v in ("false_positive", "true_positive", "benign")
+        }
+    except Exception as _le:
+        logger.error(f"feedback list failed: {_le}")
+        return {"feedback": [], "total": 0, "counts": {}}
+    return {"feedback": docs, "total": total, "counts": counts}
 
 
 # ---------------------------------------------------------------------------
@@ -5675,6 +5760,19 @@ async def _server_soar_executor(action: str, target: str, parameters: dict) -> t
             if not target or not target.strip():
                 return False, "lock_account requires a target username"
             username = target.strip()
+            # --- SELF-LOCK / bad-target guard (industry-standard safety) ---
+            # Never disable the operator's own account on the SOC/server host,
+            # and never try to lock an endpoint-id (server_host / UUID) that was
+            # passed in place of a real username.
+            _current_user = (os.environ.get("USERNAME") or "").strip()
+            if username.lower() in ("server_host", "unknown") or \
+               _re.match(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-", username):
+                return True, (f"ADVISORY: lock_account target {username!r} is an endpoint "
+                              "id, not a username — no account locked. Resolve the flagged "
+                              "user first.")
+            if _current_user and username.lower() == _current_user.lower():
+                return True, (f"ADVISORY: refused to lock operator account {username!r} on "
+                              "the SOC/server host (self-lock protection).")
             if not _re.match(r"^[\w\-\. ]{1,20}$", username):
                 return False, f"lock_account: invalid username format: {username!r}"
             if platform.system() != "Windows":

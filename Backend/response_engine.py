@@ -213,6 +213,27 @@ def generate_response_plan(fusion_alert: dict) -> dict:
 
     def _block(reason: str):
         return _block_ip_action(_extract_ip_target(fusion_alert, shap_explanation), reason)
+
+    def _user_target():
+        """Real offending username from the alert — NEVER the endpoint id.
+        lock_account must target a Windows account (e.g. 'beeb9'), not
+        'server_host'/a UUID. Returns None if no username can be resolved."""
+        _bad = ("", "unknown", "none", "null", "server_host")
+        for k in ("username", "user", "account", "user_name", "flagged_user"):
+            v = str(fusion_alert.get(k, "")).strip()
+            if v and v.lower() not in _bad:
+                return v
+        _ud = fusion_alert.get("user_detail") or {}
+        if isinstance(_ud, dict):
+            for k in ("username", "user", "account"):
+                v = str(_ud.get(k, "")).strip()
+                if v and v.lower() not in _bad:
+                    return v
+        return None
+
+    def _lock(reason: str):
+        u = _user_target()
+        return {"action": "lock_account", "target": u, "reason": reason} if u else None
     # -------------------------------------------------------------------------
 
     # Build the action list based on attack type (case-insensitive keyword matching)
@@ -248,7 +269,7 @@ def generate_response_plan(fusion_alert: dict) -> dict:
     elif "privilege escalation" in attack_lower:
         _actions_raw = [
             _kill("Terminate the process that performed unauthorized privilege escalation"),
-            {"action": "lock_account",    "target": endpoint_id, "reason": "Lock the escalated account pending investigation"},
+            _lock("Lock the escalated account pending investigation"),
             {"action": "monitor_persistence", "target": endpoint_id, "reason": "Enumerate persistence installed during escalation"},
         ]
         recommended_actions = [a for a in _actions_raw if a is not None]
@@ -298,7 +319,7 @@ def generate_response_plan(fusion_alert: dict) -> dict:
         _blk = _block("Block brute-force source IP after repeated failed authentication attempts")
         _actions_raw = [
             _blk,
-            {"action": "lock_account", "target": endpoint_id, "reason": "Temporarily lock the targeted account to prevent credential compromise"},
+            _lock("Temporarily lock the targeted account to prevent credential compromise"),
         ]
         recommended_actions = [a for a in _actions_raw if a is not None]
         _blk_note = f"Blocking source IP {_blk['target']}" if _blk else "Source IP unknown"
