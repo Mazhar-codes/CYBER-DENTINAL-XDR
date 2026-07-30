@@ -6683,6 +6683,13 @@ async def endpoint_ingest(payload: EndpointTelemetry):
     else:
         _ep_is_anomaly = _ub_now < _ub_st.get("anomaly_until", 0.0)   # sticky hold
     _snooze_remaining = max(0, int(_ub_st.get("snooze_until", 0.0) - _ub_now))
+    # When an analyst snoozes this endpoint's insider-threat alarm, the user
+    # signal must be neutralised across the WHOLE fusion pipeline — not just the
+    # user_anomaly badge — otherwise fusion re-fires every 5-s tick and the
+    # siren, "Insider Threat Indicator" correlated alert and auto-response plan
+    # keep popping for a user the analyst already acknowledged. Network / system /
+    # malware signals are unaffected, so a genuine multi-domain attack still fires.
+    _fusion_user_score = 0.0 if _snoozed else user_score
     await sio.emit("user_anomaly", {
         "user":             ep.username,
         "hostname":         ep.hostname,
@@ -6710,7 +6717,7 @@ async def endpoint_ingest(payload: EndpointTelemetry):
     if _fusion_agent:
         fusion = _fusion_agent.fuse(
             network_score=network_score,
-            user_score=user_score,
+            user_score=_fusion_user_score,
             system_score=system_score,
             malware_score=malware_score,
             endpoint_id=ep.endpoint_id,
@@ -6786,12 +6793,12 @@ async def endpoint_ingest(payload: EndpointTelemetry):
     # Gating at 0.70 prevents system-only cpu=100% events from cross-contaminating
     # the server-pipeline correlation window and causing false CRITICAL alerts.
     _ep_fusion_sev = fusion_result.get("severity", "LOW") if fusion_result else "LOW"
-    max_score = max(network_score, system_score, malware_score, user_score)
+    max_score = max(network_score, system_score, malware_score, _fusion_user_score)
     if max_score >= 0.70 and _ep_fusion_sev in ("HIGH", "CRITICAL"):
         most_significant_source = (
-            "network" if network_score >= max(system_score, malware_score, user_score)
-            else "system" if system_score >= max(malware_score, user_score)
-            else "malware" if malware_score >= user_score
+            "network" if network_score >= max(system_score, malware_score, _fusion_user_score)
+            else "system" if system_score >= max(malware_score, _fusion_user_score)
+            else "malware" if malware_score >= _fusion_user_score
             else "user"
         )
         try:
