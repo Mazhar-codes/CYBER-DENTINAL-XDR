@@ -1102,6 +1102,10 @@ export default function LoginPage({ overlay = false }: { overlay?: boolean } = {
                       {loading ? 'Authenticating...' : 'Authenticate'}
                     </motion.button>
 
+                    <div style={{ textAlign: 'center', marginTop: 12 }}>
+                      <span style={{ color: '#6b8fa3', fontSize: 11 }}>First-time setup on a new database? </span>
+                      <Link to="/register" style={{ color: '#00d4ff', fontSize: 11, fontWeight: 700, textDecoration: 'none' }}>Create the admin account</Link>
+                    </div>
                   </motion.form>
                 )}
 

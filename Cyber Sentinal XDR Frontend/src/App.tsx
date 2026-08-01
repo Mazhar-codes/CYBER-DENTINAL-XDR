@@ -8,6 +8,7 @@ import NetworkMonitor from './components/NetworkMonitor';
 import UnauthorizedBanner from './components/UnauthorizedBanner';
 import StartupScreen from './components/StartupScreen';
 import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
 import MFASetupPage from './pages/MFASetupPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
@@ -62,6 +63,7 @@ function AnimatedRoutes() {
       >
         <Routes location={location}>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/mfa-recovery" element={<MFARecoveryRequestPage />} />
