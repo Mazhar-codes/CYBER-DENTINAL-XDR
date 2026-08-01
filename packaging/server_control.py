@@ -17,6 +17,9 @@ Layout when frozen (installed): {app}\server\
 """
 import os
 import sys
+import glob
+import shutil
+import socket
 import secrets
 import subprocess
 import threading
@@ -173,6 +176,7 @@ class ControlPanel(tk.Tk):
 
         row1 = tk.Frame(self, bg=COLORS["bg"]); row1.pack(pady=4)
         self._btn(row1, "Test Database", self._test_db, COLORS["accent"])
+        self._btn(row1, "Setup Local DB", self._setup_local, COLORS["accent"])
         self._btn(row1, "Save Config", self._save, COLORS["accent"])
         row2 = tk.Frame(self, bg=COLORS["bg"]); row2.pack(pady=4)
         self._btn(row2, "Start Server", self._start, COLORS["ok"])
@@ -197,12 +201,106 @@ class ControlPanel(tk.Tk):
             self.hint.config(text="Local mode: uses a MongoDB installed on THIS computer. If Test says "
                                   "'no local MongoDB', install MongoDB Community (mongodb.com), start it, "
                                   "then Test again. The 27 collections are created automatically on first start.")
+            self._local_status()
         else:
             if "localhost" in self.uri.get() or "127.0.0.1" in self.uri.get():
                 self.uri.set(self._atlas_cache)
             self.hint.config(text="Atlas mode: paste your MongoDB Atlas connection string. Tip: if a "
                                   "mongodb+srv:// link fails with a DNS error, use the STANDARD string "
                                   "(mongodb:// with 3 servers) from Atlas -> Connect -> Drivers.")
+
+    # ---- Local MongoDB detection + guided install --------------------------
+    def _mongo_running(self):
+        try:
+            s = socket.create_connection(("127.0.0.1", 27017), timeout=2); s.close(); return True
+        except Exception:
+            return False
+
+    def _mongo_installed(self):
+        if shutil.which("mongod"):
+            return True
+        if glob.glob(r"C:\Program Files\MongoDB\Server\*\bin\mongod.exe"):
+            return True
+        try:
+            out = subprocess.run(["sc", "query", "MongoDB"], creationflags=CREATE_NO_WINDOW,
+                                 capture_output=True, text=True)
+            if "STATE" in (out.stdout or ""):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _local_status(self):
+        def work():
+            if self._mongo_running():
+                self.status.config(text="Local MongoDB: RUNNING and reachable - click Test Database.", fg=COLORS["ok"])
+            elif self._mongo_installed():
+                self.status.config(text="MongoDB is installed but NOT running - click 'Setup Local DB' to start it.",
+                                   fg=COLORS["muted"])
+            else:
+                self.status.config(text="MongoDB is NOT installed - click 'Setup Local DB' to install it.",
+                                   fg=COLORS["bad"])
+        threading.Thread(target=work, daemon=True).start()
+
+    def _setup_local(self):
+        """Detect -> start service if installed, or offer to install MongoDB Community."""
+        if self._mongo_running():
+            messagebox.showinfo("Ready", "Local MongoDB is already running.\n\nMake sure Database is set to "
+                                "'Local MongoDB', click Save Config, then Start Server.")
+            self._local_status(); return
+        if self._mongo_installed():
+            try:
+                subprocess.run(["net", "start", "MongoDB"], creationflags=CREATE_NO_WINDOW, capture_output=True)
+            except Exception:
+                pass
+            if self._mongo_running():
+                messagebox.showinfo("Started", "Local MongoDB service started. Click Test Database.")
+            else:
+                messagebox.showwarning("Manual start needed",
+                    "MongoDB is installed but couldn't be started automatically (needs admin).\n\n"
+                    "Open Services (services.msc), find 'MongoDB', right-click -> Start. "
+                    "Or run this in an admin PowerShell:\n\n    net start MongoDB")
+            self._local_status(); return
+        # Not installed -> offer winget auto-install, else the download page
+        choice = messagebox.askyesno("Install MongoDB",
+            "MongoDB is not installed on this computer.\n\n"
+            "Install it automatically now with winget?\n"
+            "(needs internet + admin approval; takes a few minutes)\n\n"
+            "Yes = auto-install    No = open the download page")
+        if choice:
+            self._winget_install()
+        else:
+            webbrowser.open("https://www.mongodb.com/try/download/community")
+            messagebox.showinfo("Manual install",
+                "Download 'MongoDB Community Server' (MSI), install with the default options "
+                "(keep 'Install as a Windows Service' checked), then come back and click "
+                "'Setup Local DB' again.")
+
+    def _winget_install(self):
+        self.status.config(text="Installing MongoDB via winget - this can take several minutes...", fg=COLORS["accent"])
+        def work():
+            try:
+                subprocess.run(["winget", "install", "-e", "--id", "MongoDB.Server",
+                                "--accept-package-agreements", "--accept-source-agreements"],
+                               capture_output=True, text=True)
+            except FileNotFoundError:
+                self.status.config(text="winget not available - opening the MongoDB download page...", fg=COLORS["bad"])
+                webbrowser.open("https://www.mongodb.com/try/download/community"); return
+            except Exception as e:
+                self.status.config(text="Install error: " + str(e)[:80], fg=COLORS["bad"]); return
+            # MSI installs the service; make sure it's running
+            try:
+                subprocess.run(["net", "start", "MongoDB"], creationflags=CREATE_NO_WINDOW, capture_output=True)
+            except Exception:
+                pass
+            if self._mongo_running():
+                self.status.config(text="MongoDB installed and running - click Test Database.", fg=COLORS["ok"])
+            elif self._mongo_installed():
+                self.status.config(text="MongoDB installed. Start it via 'Setup Local DB', then Test.", fg=COLORS["muted"])
+            else:
+                self.status.config(text="Could not confirm the install - open the download page to install manually.",
+                                   fg=COLORS["bad"])
+        threading.Thread(target=work, daemon=True).start()
 
     def _port_val(self):
         return (self.port.get().strip() or "8000")
