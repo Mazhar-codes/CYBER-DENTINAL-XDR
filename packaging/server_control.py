@@ -126,7 +126,21 @@ class ControlPanel(tk.Tk):
         tk.Label(self, text="CYBER SENTINEL XDR", bg=COLORS["bg"], fg=COLORS["accent"],
                  font=("Consolas", 18, "bold")).pack(pady=(16, 0))
         tk.Label(self, text="Server Control Panel", bg=COLORS["bg"], fg=COLORS["muted"],
-                 font=("Consolas", 10)).pack(pady=(0, 10))
+                 font=("Consolas", 10)).pack(pady=(0, 8))
+
+        # --- Endpoint URL (what to paste into endpoint agents) ---
+        self._ip = self._lan_ip()
+        epf = tk.Frame(self, bg=COLORS["panel"])
+        epf.pack(fill="x", padx=28, pady=(0, 4))
+        tk.Label(epf, text="Endpoint URL:", bg=COLORS["panel"], fg=COLORS["muted"],
+                 font=("Consolas", 9)).pack(side="left", padx=(8, 4), pady=6)
+        self.epurl = tk.StringVar(value=self._endpoint_url())
+        tk.Label(epf, textvariable=self.epurl, bg=COLORS["panel"], fg=COLORS["ok"],
+                 font=("Consolas", 11, "bold")).pack(side="left", pady=6)
+        tk.Button(epf, text="Copy", command=self._copy_url, bg=COLORS["bg"], fg=COLORS["accent"],
+                  relief="flat", font=("Consolas", 8), cursor="hand2").pack(side="right", padx=8)
+        tk.Label(self, text="Give this Endpoint URL + the API Key (below) to each endpoint agent.",
+                 bg=COLORS["bg"], fg=COLORS["hint"], font=("Consolas", 8)).pack(padx=30, pady=(0, 6))
 
         # --- Database type chooser ---
         dbframe = tk.Frame(self, bg=COLORS["bg"])
@@ -302,6 +316,21 @@ class ControlPanel(tk.Tk):
                                    fg=COLORS["bad"])
         threading.Thread(target=work, daemon=True).start()
 
+    def _lan_ip(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(1)
+            s.connect(("8.8.8.8", 80)); ip = s.getsockname()[0]; s.close(); return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def _endpoint_url(self):
+        ip = getattr(self, "_ip", None) or self._lan_ip()
+        return f"http://{ip}:{self._port_val()}"
+
+    def _copy_url(self):
+        self.clipboard_clear(); self.clipboard_append(self._endpoint_url())
+        self.status.config(text="Endpoint URL copied to clipboard.", fg=COLORS["accent"])
+
     def _port_val(self):
         return (self.port.get().strip() or "8000")
 
@@ -350,7 +379,7 @@ class ControlPanel(tk.Tk):
         try:
             subprocess.run(["taskkill", "/IM", "backend.exe", "/F"],
                            creationflags=CREATE_NO_WINDOW, capture_output=True)
-            self.status.config(text="Server stopped.", fg=COLORS["muted"])
+            self.status.config(text="Server stopped. Dashboard is now offline (you can close its browser tab).", fg=COLORS["muted"])
         except Exception as e:
             messagebox.showerror("Stop failed", str(e))
 
@@ -358,6 +387,8 @@ class ControlPanel(tk.Tk):
         webbrowser.open(f"http://localhost:{self._port_val()}/")
 
     def _poll_status(self):
+        if hasattr(self, "epurl"):
+            self.epurl.set(self._endpoint_url())
         def work():
             running, mongo = False, None
             try:
