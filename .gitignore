@@ -22,6 +22,8 @@ build_env/
 packaging/installer/redist/
 endpoint_agent/endpoint_config.json
 endpoint_agent/isolation_flag.txt
+# Built launcher executables (rebuild locally via launcher/build_launchers.ps1)
+XDR-Launcher/
 
 # Raw ML training datasets (tens of GB) — kept local only, never pushed
 Network Behavior/CICDS_dataset/
