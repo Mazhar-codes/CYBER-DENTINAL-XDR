@@ -167,8 +167,8 @@ const contactCards: ContactCard[] = [
     iconBg: '#06b6d4',
     label: 'Secure Voice / WhatsApp',
     title: 'Phone',
-    value: '+92 300 9589 7502',
-    href: 'tel:+9230095897502',
+    value: '+92 300 958 9752',
+    href: 'tel:+923009589752',
     sub: 'Mon–Sat 09:00–21:00 PKT',
   },
   {
