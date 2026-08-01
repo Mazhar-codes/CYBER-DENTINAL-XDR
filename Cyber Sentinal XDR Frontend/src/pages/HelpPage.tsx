@@ -334,7 +334,7 @@ function ChatWidget() {
                 Open Contact Form
               </Link>
               <a
-                href="mailto:annashabib02283@gmail.com"
+                href="mailto:syedmazharhussainshah@gmail.com"
                 style={{
                   display: 'block', textAlign: 'center',
                   padding: '8px 16px', borderRadius: 8,
@@ -344,7 +344,7 @@ function ChatWidget() {
                   fontFamily: "'Fira Code', monospace",
                 }}
               >
-                annashabib02283@gmail.com
+                syedmazharhussainshah@gmail.com
               </a>
             </div>
           </motion.div>

@@ -24,7 +24,7 @@
 #define MyAppVersion "1.0.0"
 #define MyPublisher  "Cyber Sentinel XDR"
 #define BackendExe   "backend.exe"
-#define TaskName     "CyberSentinelXDR Server"
+#define ControlExe   "ServerControl.exe"
 #define ServerBundle "C:\csxb\dist\backend"
 
 [Setup]
@@ -60,12 +60,10 @@ Source: "EULA.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [UninstallDelete]
 Type: files; Name: "{app}\server\.env"
-Type: files; Name: "{app}\run_backend.cmd"
 
 [Code]
 var
-  CfgPage: TInputQueryWizardPage;
-  JwtSecret: String;
+  ApiKey, JwtSecret: String;
 
 { Generate a strong random hex token (64 chars) via PowerShell crypto (two GUIDs).
   Falls back to a tick-based value so the .env always has a usable, non-default
@@ -86,105 +84,71 @@ end;
 
 procedure InitializeWizard;
 begin
+  ApiKey := GenToken;      { strong default; editable later in the Control Panel }
   JwtSecret := GenToken;   { internal session-signing secret; never shown }
-  CfgPage := CreateInputQueryPage(wpLicense,
-    'Server Configuration',
-    'Set the API key, port, and database for this SOC server',
-    'A strong API key is pre-generated. The SAME API key must be entered on each endpoint agent, so copy it before you finish.');
-  CfgPage.Add('API key (shared with endpoint agents):', False);
-  CfgPage.Add('Backend port:', False);
-  CfgPage.Add('MongoDB URI (local default, or paste an Atlas SRV string):', False);
-  CfgPage.Values[0] := GenToken;
-  CfgPage.Values[1] := '8000';
-  CfgPage.Values[2] := 'mongodb://localhost:27017';
 end;
 
-function NextButtonClick(CurPageID: Integer): Boolean;
-var portNum: Integer;
-begin
-  Result := True;
-  if CurPageID = CfgPage.ID then
-  begin
-    if Length(Trim(CfgPage.Values[0])) < 16 then begin
-      MsgBox('The API key should be at least 16 characters.', mbError, MB_OK); Result := False; Exit;
-    end;
-    portNum := StrToIntDef(Trim(CfgPage.Values[1]), -1);
-    if (portNum < 1) or (portNum > 65535) then begin
-      MsgBox('Enter a valid port (1-65535).', mbError, MB_OK); Result := False; Exit;
-    end;
-    if Trim(CfgPage.Values[2]) = '' then begin
-      MsgBox('Enter a MongoDB URI (or keep the local default).', mbError, MB_OK); Result := False; Exit;
-    end;
-  end;
-end;
-
-{ Stop a previous server (upgrade) so its exe is not locked. }
+{ Stop a previous server/control panel (upgrade) so exes are not locked. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var rc: Integer;
 begin
   Result := '';
-  Exec(ExpandConstant('{sys}\schtasks.exe'), '/end /tn "{#TaskName}"', '', SW_HIDE, ewWaitUntilTerminated, rc);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#BackendExe}', '', SW_HIDE, ewWaitUntilTerminated, rc);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#ControlExe}', '', SW_HIDE, ewWaitUntilTerminated, rc);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  env, cmdFile, params, port: String;
+  env: String;
   rc: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
-    port := Trim(CfgPage.Values[1]);
-
     { 1. Install the VC++ runtime (silent). Required by lightgbm + torch. }
     Exec(ExpandConstant('{tmp}\vc_redist.x64.exe'), '/install /quiet /norestart', '',
          SW_SHOW, ewWaitUntilTerminated, rc);
 
-    { 2. Write the server .env next to backend.exe (backend_entry loads it on start). }
+    { 2. Write a starter .env with strong secrets. MongoDB defaults to localhost;
+         set your real database (local or Atlas) in the Server Control Panel. }
     env :=
-      'XDR_API_KEY=' + Trim(CfgPage.Values[0]) + #13#10 +
+      'XDR_API_KEY=' + ApiKey + #13#10 +
       'JWT_SECRET_KEY=' + JwtSecret + #13#10 +
       'BACKEND_HOST=0.0.0.0' + #13#10 +
-      'BACKEND_PORT=' + port + #13#10 +
-      'MONGO_URI=' + Trim(CfgPage.Values[2]) + #13#10;
+      'BACKEND_PORT=8000' + #13#10 +
+      'MONGO_URI=mongodb://localhost:27017' + #13#10;
     SaveStringToFile(ExpandConstant('{app}\server\.env'), env, False);
 
     { 3. Open the firewall so LAN SOC users + endpoints can reach the server. }
     Exec(ExpandConstant('{sys}\netsh.exe'),
-         'advfirewall firewall add rule name="CyberSentinelXDR Server ' + port + '" dir=in action=allow protocol=TCP localport=' + port,
+         'advfirewall firewall add rule name="CyberSentinelXDR Server 8000" dir=in action=allow protocol=TCP localport=8000',
          '', SW_HIDE, ewWaitUntilTerminated, rc);
 
-    { 4. Launcher .cmd (avoids nested-quote issues) + boot-time SYSTEM task. }
-    cmdFile := ExpandConstant('{app}\run_backend.cmd');
-    SaveStringToFile(cmdFile,
-      '@echo off' + #13#10 + '"' + ExpandConstant('{app}\server\{#BackendExe}') + '"' + #13#10, False);
-    params := '/create /tn "{#TaskName}" /sc onstart /ru SYSTEM /rl HIGHEST /f /tr "cmd /c \"' + cmdFile + '\""';
-    Exec(ExpandConstant('{sys}\schtasks.exe'), params, '', SW_HIDE, ewWaitUntilTerminated, rc);
-    Exec(ExpandConstant('{sys}\schtasks.exe'), '/run /tn "{#TaskName}"', '', SW_HIDE, ewWaitUntilTerminated, rc);
-
-    { Remind the operator of the API key to configure endpoint agents with. }
-    MsgBox('Cyber Sentinel XDR Server installed and starting on port ' + port + '.'#13#10#13#10 +
-           'API key (enter this on each endpoint agent):'#13#10 + Trim(CfgPage.Values[0]) + #13#10#13#10 +
-           'The server may take up to a minute to finish loading its models.',
+    { 4. The server is started from the Control Panel, not a boot task. }
+    MsgBox('Cyber Sentinel XDR Server installed.'#13#10#13#10 +
+           'The Server Control Panel will open now. Use it to:'#13#10 +
+           '  - set your MongoDB URI (local or Atlas)'#13#10 +
+           '  - copy the API key for your endpoint agents'#13#10 +
+           '  - Start the server and open the dashboard'#13#10#13#10 +
+           'API key:'#13#10 + ApiKey,
            mbInformation, MB_OK);
   end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var rc: Integer; port: String;
+var rc: Integer;
 begin
   if CurUninstallStep = usUninstall then
   begin
-    Exec(ExpandConstant('{sys}\schtasks.exe'), '/end /tn "{#TaskName}"', '', SW_HIDE, ewWaitUntilTerminated, rc);
-    Exec(ExpandConstant('{sys}\schtasks.exe'), '/delete /tn "{#TaskName}" /f', '', SW_HIDE, ewWaitUntilTerminated, rc);
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#ControlExe}', '', SW_HIDE, ewWaitUntilTerminated, rc);
     Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#BackendExe}', '', SW_HIDE, ewWaitUntilTerminated, rc);
   end;
 end;
 
 [Icons]
-; Start-menu shortcut that opens the dashboard in the default browser.
-Name: "{group}\Cyber Sentinel XDR Dashboard"; Filename: "http://localhost:8000/"
+; Shortcuts to the Server Control Panel (config + start/stop + open dashboard).
+Name: "{group}\Cyber Sentinel XDR Server Control"; Filename: "{app}\server\{#ControlExe}"
+Name: "{commondesktop}\Cyber Sentinel XDR Server"; Filename: "{app}\server\{#ControlExe}"
 
 [Run]
-; Offer to open the dashboard when setup finishes.
-Filename: "http://localhost:8000/"; Description: "Open the Cyber Sentinel XDR dashboard"; Flags: postinstall shellexec nowait
+; Open the Control Panel when setup finishes so the operator can configure + start.
+Filename: "{app}\server\{#ControlExe}"; Description: "Open the Server Control Panel"; Flags: postinstall nowait

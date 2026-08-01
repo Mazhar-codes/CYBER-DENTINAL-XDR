@@ -158,8 +158,8 @@ const contactCards: ContactCard[] = [
     iconBg: '#6366f1',
     label: 'Encrypted Email',
     title: 'Email',
-    value: 'annashabib02283@gmail.com',
-    href: 'mailto:annashabib02283@gmail.com',
+    value: 'syedmazharhussainshah@gmail.com',
+    href: 'mailto:syedmazharhussainshah@gmail.com',
     sub: 'Response within 4h',
   },
   {
@@ -167,8 +167,8 @@ const contactCards: ContactCard[] = [
     iconBg: '#06b6d4',
     label: 'Secure Voice / WhatsApp',
     title: 'Phone',
-    value: '+92 336 501 3274',
-    href: 'tel:+923365013274',
+    value: '+92 300 9589 7502',
+    href: 'tel:+9230095897502',
     sub: 'Mon–Sat 09:00–21:00 PKT',
   },
   {
@@ -184,17 +184,6 @@ const contactCards: ContactCard[] = [
 // ── Team members ─────────────────────────────────────────────────────────────
 
 const teamMembers = [
-  {
-    name: 'Annas Habib',
-    role: 'AI/ML Engineer',
-    initials: 'AH',
-    photo: '/team/Annas.jpeg',
-    gradient: 'linear-gradient(135deg, #6366f1, #4f46e5)',
-    glowColor: 'rgba(99,102,241,0.5)',
-    email: 'annashabib02283@gmail.com',
-    linkedin: 'https://www.linkedin.com/in/annas-habib-b5b13b28a/',
-    bio: 'Expert in building production ML pipelines; designed the 4-model Fusion Engine and SHAP explainability layer for Cyber Sentinel XDR. Specializes in anomaly detection with IsolationForest, RandomForest classifiers, and LSTM autoencoders trained on real-world threat datasets.',
-  },
   {
     name: 'Malaika Khattak',
     role: 'Backend Developer',

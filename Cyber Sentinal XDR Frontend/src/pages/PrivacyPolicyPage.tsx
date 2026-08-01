@@ -583,12 +583,12 @@ export default function PrivacyPolicyPage() {
                 <span style={{ fontSize: 13, color: '#94a3b8', fontFamily: "'Fira Code', monospace" }}>
                   Email:{' '}
                   <a
-                    href="mailto:annashabib02283@gmail.com"
+                    href="mailto:syedmazharhussainshah@gmail.com"
                     style={{ color: '#a5b4fc', textDecoration: 'none', transition: 'color 0.2s' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#c7d2fe'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#a5b4fc'; }}
                   >
-                    annashabib02283@gmail.com
+                    syedmazharhussainshah@gmail.com
                   </a>
                 </span>
               </div>

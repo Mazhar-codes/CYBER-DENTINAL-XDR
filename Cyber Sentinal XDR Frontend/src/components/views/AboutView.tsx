@@ -978,7 +978,7 @@ export default function AboutView() {
                 }}
               >
                 <span style={{ color: "var(--accent-amber)" }}>◈</span>
-                System Architect: Annas Habib
+                System Architect: Syed Mazhar Hussain Shah
               </div>
               <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 8, lineHeight: 1.6 }}>
                 Inspired by enterprise-grade XDR architectures including CrowdStrike
