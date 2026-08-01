@@ -6,7 +6,6 @@ import { useAuth } from '../context/AuthContext';
 import { verify2FA, verify2FAWithBackupCode } from '../services/authService';
 import OTPInput from '../components/OTPInput';
 import DualOrbitLoader from '../components/shared/DualOrbitLoader';
-import DemoModeButton from '../components/shared/DemoModeButton';
 
 interface LocationState {
   from?: { pathname: string };
@@ -841,7 +840,6 @@ export default function LoginPage({ overlay = false }: { overlay?: boolean } = {
           top-level copy so it's clickable immediately, unaffected by the
           overlay's pointerEvents:'none' wrapper and not gated behind
           scrolling to the last cinematic scene. */}
-      {!overlay && <DemoModeButton />}
 
       {/* Auth card — layout-animated, hover to expand */}
       <motion.div
@@ -1104,10 +1102,6 @@ export default function LoginPage({ overlay = false }: { overlay?: boolean } = {
                       {loading ? 'Authenticating...' : 'Authenticate'}
                     </motion.button>
 
-                    <div style={{ textAlign: 'center', marginTop: 8 }}>
-                      <span style={{ color: '#6b8fa3', fontSize: 12 }}>No account? </span>
-                      <Link to="/register" style={{ color: '#00d4ff', fontSize: 12, fontWeight: 700, textDecoration: 'none' }}>Request Access</Link>
-                    </div>
                   </motion.form>
                 )}
 

@@ -244,30 +244,34 @@ export default function UserBehaviorView({
             One-Class SVM insider threat detection — CERT r4.2 baseline
           </p>
         </div>
-        <LiveIndicator active={(userSummary?.total_users ?? 0) > 0} label="UBA LIVE" />
+        <LiveIndicator active={Math.max(userSummary?.total_users ?? 0, userAnomalies.length) > 0} label="UBA LIVE" />
       </div>
 
       {/* Summary cards */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         {[
           {
+            // The server-side summary (Winlogbeat pipeline) can report 0 users while
+            // endpoint-agent user telemetry populates the table below. Never show fewer
+            // than the users actually displayed — otherwise the cards read 0 next to a
+            // populated table. (`??` alone didn't help: the summary sends 0, not null.)
             label: "Total Users",
-            value: userSummary?.total_users ?? 0,
+            value: Math.max(userSummary?.total_users ?? 0, userAnomalies.length),
             sub: "monitored this cycle",
             accent: "#3b82f6",
           },
           {
             label: "Normal Users",
-            value: userSummary?.normal_users ?? normalCount,
+            value: Math.max(userSummary?.normal_users ?? 0, normalCount),
             sub: "clean behavior",
             accent: "#22c55e",
           },
           {
             label: "Anomalies",
-            value: userSummary?.anomaly_users ?? anomalyCount,
+            value: Math.max(userSummary?.anomaly_users ?? 0, anomalyCount),
             sub: "flagged users",
             accent: "#ea580c",
-            glow: (userSummary?.anomaly_users ?? anomalyCount) > 0,
+            glow: Math.max(userSummary?.anomaly_users ?? 0, anomalyCount) > 0,
           },
           {
             label: "Avg Risk Score",
@@ -537,8 +541,16 @@ export default function UserBehaviorView({
               ) : (
                 filteredRows.map((row, idx) => {
                   const isAnomaly = row.prediction_label === "ANOMALY";
+                  // A snoozed alarm is intentionally silenced — render the row calmly
+                  // (SNOOZED status, no severity/pulse) instead of a red ANOMALY, while
+                  // the badge below still shows how long it's silenced. The underlying
+                  // anomaly data is unchanged (snooze only mutes the alarm).
+                  const _snoozeUntil = row.endpoint_id ? (snoozedUntil[row.endpoint_id] ?? 0) : 0;
+                  const isSnoozed = !!(row.snoozed || _snoozeUntil > Date.now());
+                  const displayAnomaly = isAnomaly && !isSnoozed;
                   const sev = row.fusion?.severity ?? (isAnomaly ? "HIGH" : "");
                   const sevColor = SEVERITY_COLOUR[sev] ?? "#6b7280";
+                  const displaySev = isSnoozed ? "" : sev;
 
                   // Determine display score: prefer explicit user_score, then anomaly_score
                   const rawScore = row.user_score ?? row.anomaly_score ?? 0;
@@ -575,7 +587,7 @@ export default function UserBehaviorView({
                     >
                       {/* User column */}
                       <td style={{ padding: "10px 14px", fontFamily: "monospace", color: "var(--accent-cyan)", whiteSpace: "nowrap", fontWeight: 600 }}>
-                        {isAnomaly && !isMachineAccount && (
+                        {displayAnomaly && !isMachineAccount && (
                           <span
                             style={{
                               display: "inline-block",
@@ -786,9 +798,9 @@ export default function UserBehaviorView({
                             display: "inline-flex",
                             alignItems: "center",
                             gap: 4,
-                            background: isAnomaly ? "#ea580c1a" : "#22c55e1a",
-                            color: isAnomaly ? "#ea580c" : "#22c55e",
-                            border: `1px solid ${isAnomaly ? "#ea580c44" : "#22c55e44"}`,
+                            background: isSnoozed ? "rgba(148,163,184,0.15)" : displayAnomaly ? "#ea580c1a" : "#22c55e1a",
+                            color: isSnoozed ? "var(--text-muted)" : displayAnomaly ? "#ea580c" : "#22c55e",
+                            border: `1px solid ${isSnoozed ? "rgba(148,163,184,0.3)" : displayAnomaly ? "#ea580c44" : "#22c55e44"}`,
                             borderRadius: 20,
                             padding: "2px 10px",
                             fontWeight: 700,
@@ -796,13 +808,13 @@ export default function UserBehaviorView({
                             letterSpacing: 0.5,
                           }}
                         >
-                          {isAnomaly ? "ANOMALY" : "NORMAL"}
+                          {isSnoozed ? "SNOOZED" : displayAnomaly ? "ANOMALY" : "NORMAL"}
                         </span>
                       </td>
 
                       {/* Severity */}
                       <td style={{ padding: "10px 14px" }}>
-                        {sev ? <SeverityBadge severity={sev} size="sm" /> : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                        {displaySev ? <SeverityBadge severity={displaySev} size="sm" /> : <span style={{ color: "var(--text-muted)" }}>—</span>}
                       </td>
 
                       {/* Sessions (endpoint) or login count (Winlogbeat) */}

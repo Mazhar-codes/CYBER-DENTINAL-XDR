@@ -678,9 +678,14 @@ def _build_narrative_text(
 # ---------------------------------------------------------------------------
 # Constants that are always available (regardless of reportlab)
 # ---------------------------------------------------------------------------
-# Prefer XDR_REPORTS_DIR env var (set via config.py / .env); fall back to the
-# original hard-coded path so existing deployments are unaffected.
-_REPORTS_DIR = Path(os.environ.get("XDR_REPORTS_DIR", r"D:\Cyber Sentinal\reports"))
+# Resolve the reports directory from centralized config (frozen-aware, and
+# env-overridable via XDR_REPORTS_DIR). Fall back to a repo-relative path if
+# config cannot be imported — never to an absolute drive path.
+try:
+    from config import settings as _cfg_settings
+    _REPORTS_DIR = Path(_cfg_settings.reports_dir)
+except Exception:
+    _REPORTS_DIR = Path(os.environ.get("XDR_REPORTS_DIR", str(Path(__file__).parent.parent / "reports")))
 
 # Logo — resolved relative to this file so it works regardless of cwd
 _LOGO_PATH = Path(__file__).parent / "logo.jpg"

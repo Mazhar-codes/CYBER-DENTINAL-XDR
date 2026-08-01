@@ -121,6 +121,8 @@ const ACTIONS: ActionDef[] = [
   { id: "unlock_account",     label: "Unlock Account",   color: "#06b6d4", placeholder: "Username to unlock" },
   { id: "scan_filesystem",    label: "Scan Filesystem",  color: "var(--accent-purple)", placeholder: "Leave blank to scan all" },
   { id: "monitor_persistence",label: "Monitor Persist.", color: "var(--text-muted)", placeholder: "Leave blank" },
+  { id: "shutdown_host",      label: "Shut Down Endpoint", color: "#b91c1c", placeholder: "Hostname", isConfirm: true },
+  { id: "sleep_host",         label: "Sleep Endpoint",     color: "#f59e0b", placeholder: "Hostname", isConfirm: true },
 ];
 
 /** Actions that do not require a target string — send with empty target. */
@@ -1305,19 +1307,19 @@ export default function EndpointView({
                               color: action.id === "unisolate_host" ? "#7dd3fc" : "#fca5a5",
                             }}
                           >
-                            {action.id === "unisolate_host" ? (
-                              <>
-                                Restore network access for{" "}
-                                <strong>{selectedEndpoint?.hostname ?? selectedEndpointId}</strong>?
-                                This will re-enable the network interface. Confirm to proceed.
-                              </>
-                            ) : (
-                              <>
-                                Are you sure? This will isolate{" "}
-                                <strong>{selectedEndpoint?.hostname ?? selectedEndpointId}</strong> from
-                                the network. This action requires confirmation.
-                              </>
-                            )}
+                            {(() => {
+                              const host = <strong>{selectedEndpoint?.hostname ?? selectedEndpointId}</strong>;
+                              if (action.id === "unisolate_host") {
+                                return <>Restore network access for {host}? This will re-enable the network interface. Confirm to proceed.</>;
+                              }
+                              if (action.id === "shutdown_host") {
+                                return <>⚠️ This will SHUT DOWN {host} after a 30-second warning. This is irreversible from here — the machine can only be powered back on physically. Confirm to proceed.</>;
+                              }
+                              if (action.id === "sleep_host") {
+                                return <>This will put {host} to SLEEP after a 30-second warning. The machine stays off until someone wakes it locally. Confirm to proceed.</>;
+                              }
+                              return <>Are you sure? This will isolate {host} from the network. This action requires confirmation.</>;
+                            })()}
                           </div>
                         ) : (() => {
                           const actionKey2 = `${selectedEndpointId}::${activeAction}`;
@@ -1375,7 +1377,10 @@ export default function EndpointView({
                             }}
                           >
                             {confirmPending
-                            ? (activeAction === "unisolate_host" ? "Confirm Unisolate" : "Confirm Isolate")
+                            ? (activeAction === "unisolate_host" ? "Confirm Unisolate"
+                              : activeAction === "shutdown_host" ? "Confirm Shutdown"
+                              : activeAction === "sleep_host" ? "Confirm Sleep"
+                              : "Confirm Isolate")
                             : "Send"}
                           </button>
                           <button
@@ -1502,6 +1507,7 @@ export default function EndpointView({
                     block_ip: "Block IP", unblock_ip: "Unblock IP", isolate_host: "Isolate",
                     unisolate_host: "Unisolate", kill_process: "Kill Proc", quarantine_file: "Quarantine",
                     restore_quarantine_file: "Restore", lock_account: "Lock Acct", unlock_account: "Unlock Acct",
+                    shutdown_host: "Shut Down", sleep_host: "Sleep",
                     scan_filesystem: "Scan FS", monitor_persistence: "Monitor Persist",
                   };
                   const actionLabel = ACTION_LABELS[r.action ?? ""] ?? (r.action ?? "Command");

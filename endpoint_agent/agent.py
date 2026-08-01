@@ -33,7 +33,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
@@ -140,6 +140,27 @@ class _HealthHandler(BaseHTTPRequestHandler):
         log.debug("health-server: " + fmt, *args)
 
 
+class _QuietHealthServer(ThreadingHTTPServer):
+    """Threaded health server that swallows port-scanner noise.
+
+    This host also runs the deception honeypot, so it is a deliberate scan
+    target. When a scanner (nmap) or any probe resets the connection mid-request,
+    http.server raises ConnectionResetError/BrokenPipeError from readline/write.
+    The stock ``handle_error`` dumps a full traceback to stderr for every such
+    probe — dozens per scan — which looks like a crash but is only expected
+    scan traffic. We drop those quietly and keep serving.
+    """
+
+    daemon_threads = True
+
+    def handle_error(self, request, client_address) -> None:  # noqa: D401
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError,
+                            BrokenPipeError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def _start_health_server(port: int) -> None:
     """
     Start the health HTTP server in a daemon thread.
@@ -150,7 +171,7 @@ def _start_health_server(port: int) -> None:
     thread exits automatically when the main process terminates.
     """
     try:
-        server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+        server = _QuietHealthServer(("0.0.0.0", port), _HealthHandler)
         log.info("Health server listening on http://0.0.0.0:%d/health", port)
         server.serve_forever()
     except OSError as exc:

@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cyber Sentinel XDR — reverse proxy (Windows-native, via Caddy)
+#
+# WHY THIS EXISTS
+#   uvicorn runs on asyncio's Windows ProactorEventLoop. An aggressive port scan
+#   or malicious traffic hitting uvicorn's public port can kill its accept loop
+#   (WinError 64 "network name is no longer available") — the backend then goes
+#   "zombie": the process stays alive but stops accepting ANY new connections, so
+#   every agent + the dashboard drop and the endpoint goes offline.
+#
+#   There is no reliable app-code fix for that OS-level asyncio fragility. The
+#   permanent fix — used by every production Python web service — is to put a
+#   hardened reverse proxy in front of the app. Caddy (a battle-tested Go server)
+#   absorbs the raw/malicious connection traffic and forwards only clean HTTP to
+#   uvicorn, which now binds loopback ONLY and never sees a scan again. This works
+#   for EVERY user and endpoint, needs no code change, and runs natively on Windows.
+#
+# TOPOLOGY
+#   endpoints / browsers ──► Caddy (0.0.0.0:8000) ──► uvicorn (127.0.0.1:8001)
+#
+#   Everything already targets port 8000, so NOTHING in the agent or frontend
+#   changes: Caddy takes over :8000, and uvicorn simply moves to loopback :8001.
+#
+# INSTALL CADDY (Windows)
+#   winget install CaddyServer.Caddy      (or download caddy.exe from caddyserver.com)
+#
+# RUN (two terminals)
+#   1) Backend on loopback:
+#        cd Backend
+#        venv\Scripts\activate
+#        uvicorn backend:sio_app --host 127.0.0.1 --port 8001
+#   2) Caddy from the repo root (this folder):
+#        caddy run --config Caddyfile
+#
+#   The agent's XDR_BACKEND_URL and the dashboard both keep using :8000 — they now
+#   reach Caddy, which forwards to the shielded backend.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# --- Plain HTTP reverse proxy (LAN / demo) --------------------------------------
+# This alone fixes the scan / WinError-64 problem. No certificates required.
+# A bare :port address makes Caddy serve plain HTTP (no auto-HTTPS), which is what
+# we want on a LAN. Caddy v2 proxies WebSocket (Socket.IO) upgrades transparently,
+# so no extra config is needed for the real-time event bus.
+:8000 {
+	reverse_proxy 127.0.0.1:8001
+}
+
+# --- HTTPS add-on (recommended for real deployment) -----------------------------
+# Your API key currently travels in plaintext HTTP. To encrypt everything, comment
+# out the :8000 block above and use ONE of the blocks below instead. Caddy handles
+# certificates automatically.
+#
+# (a) Public domain — Caddy auto-provisions + renews a real Let's Encrypt cert:
+#
+#   xdr.yourcompany.com {
+#       reverse_proxy 127.0.0.1:8001
+#   }
+#
+# (b) LAN / internal — Caddy's built-in CA issues a self-signed cert:
+#
+#   https://192.168.100.127 {
+#       tls internal
+#       reverse_proxy 127.0.0.1:8001
+#   }
+#
+#   Then either run `caddy trust` (installs Caddy's root CA) on each Windows
+#   endpoint so the agent trusts the cert, or point the agent at the https URL and
+#   allow the internal CA. Agents/dashboard would then use https://<server> (443).

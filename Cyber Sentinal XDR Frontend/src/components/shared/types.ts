@@ -310,7 +310,7 @@ export interface EndpointAlert {
 export interface EndpointCommand {
   command_id?: string;
   endpoint_id: string;
-  action: 'kill_process' | 'block_ip' | 'unblock_ip' | 'isolate_host' | 'unisolate_host' | 'quarantine_file' | 'restore_quarantine_file' | 'lock_account' | 'unlock_account' | 'scan_filesystem' | 'monitor_persistence';
+  action: 'kill_process' | 'block_ip' | 'unblock_ip' | 'isolate_host' | 'unisolate_host' | 'quarantine_file' | 'restore_quarantine_file' | 'lock_account' | 'unlock_account' | 'scan_filesystem' | 'monitor_persistence' | 'shutdown_host' | 'sleep_host';
   target: string;
   parameters?: Record<string, string>;
   issued_by?: string;

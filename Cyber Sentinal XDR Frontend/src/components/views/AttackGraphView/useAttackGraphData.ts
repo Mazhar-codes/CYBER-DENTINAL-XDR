@@ -17,6 +17,11 @@ import {
   BackendEdge,
 } from "./types";
 import { BACKEND_URL } from "../../../config";
+// Shared authenticated axios instance: attaches the JWT and silently refreshes it
+// on expiry. The Attack Graph previously used raw fetch() with a one-shot token
+// read, so once the 15-min access token expired its /attack-graph/snapshot and
+// /endpoint/list calls went out anonymous → 403 → empty endpoint grid + graph.
+import { authAxios } from "../../../services/authService";
 
 // ── Mock SHAP / responses (fallback) ─────────────────────────────────────────
 const MOCK_SHAP: GraphData["SHAP"] = {
@@ -382,20 +387,10 @@ export function useAttackGraphData(): UseAttackGraphDataReturn {
 
     async function fetchSnapshot(hoursParam = 1): Promise<void> {
       try {
-        const token = localStorage.getItem("access_token");
-        const res = await fetch(
-          `${BACKEND_URL}/attack-graph/snapshot?hours=${hoursParam}&min_score=0.10`,
-          { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+        const res = await authAxios.get(
+          `${BACKEND_URL}/attack-graph/snapshot?hours=${hoursParam}&min_score=0.10`
         );
-
-        if (!res.ok) {
-          if (process.env.NODE_ENV === 'development') {
-            console.warn(`[AttackGraph] snapshot returned ${res.status}`);
-          }
-          return;
-        }
-
-        const payload = await res.json() as { nodes?: BackendNode[]; edges?: BackendEdge[] };
+        const payload = res.data as { nodes?: BackendNode[]; edges?: BackendEdge[] };
         if (cancelled) return;
 
         const nodes = payload.nodes ?? [];
@@ -456,12 +451,9 @@ export function useAttackGraphData(): UseAttackGraphDataReturn {
     let cancelled = false;
     async function fetchTopology(): Promise<void> {
       try {
-        const token = localStorage.getItem("access_token");
-        const res = await fetch(`${BACKEND_URL}/endpoint/list`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!res.ok || cancelled) return;
-        const _raw = await res.json();
+        const res = await authAxios.get(`${BACKEND_URL}/endpoint/list`);
+        if (cancelled) return;
+        const _raw = res.data;
         const endpoints: Array<{
           endpoint_id: string;
           hostname?: string;

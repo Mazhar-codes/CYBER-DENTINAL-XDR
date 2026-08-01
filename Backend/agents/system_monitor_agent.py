@@ -93,7 +93,11 @@ try:
     from config import settings as _settings
     _SYSMON_MODEL_DIR = _settings.sysmon_model_dir
 except Exception:
-    _SYSMON_MODEL_DIR = r"D:\Cyber Sentinal\System Behavior\System_Behavior_Model\DETECTOR1\saved_model_v3"
+    # agents/ -> Backend/ -> repo root, then into the System Behavior model tree.
+    _SYSMON_MODEL_DIR = str(
+        Path(__file__).resolve().parent.parent.parent
+        / "System Behavior" / "System_Behavior_Model" / "DETECTOR1" / "saved_model_v3"
+    )
 
 _DETECTOR_PKL_PATH = str(Path(_SYSMON_MODEL_DIR) / "detector.pkl")
 _DETECTOR_SRC_PATH = str(Path(_SYSMON_MODEL_DIR).parent / "windows_detector_final.py")

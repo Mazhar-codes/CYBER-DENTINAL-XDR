@@ -88,6 +88,57 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Single-instance guard — prevents a second backend from starting.
+#
+# A launcher (Control Panel + Endpoint Agent GUI) can be clicked more than once,
+# or a manual `uvicorn` can be started alongside a launcher one. On Windows two
+# servers can both "bind" port 8000 (SO_REUSEADDR last-bind-wins) and the kernel
+# then splits incoming connections between them non-deterministically — the agent
+# and dashboard randomly hit a live or dead-end socket, producing intermittent
+# timeouts and an empty dashboard. We make that impossible: the first backend to
+# start grabs an exclusive lock on a dedicated loopback port; any second backend
+# fails to grab it, logs a clear message, and exits before binding port 8000.
+#
+# The guard socket is bound WITHOUT SO_REUSEADDR so a duplicate bind fails
+# deterministically (no race), and is kept alive for the whole process lifetime.
+# Set XDR_SINGLETON_GUARD=0 to disable (e.g. to run two backends on two ports).
+# ---------------------------------------------------------------------------
+_SINGLETON_GUARD_SOCK: "Optional[socket.socket]" = None
+
+
+def _acquire_singleton_lock() -> None:
+    global _SINGLETON_GUARD_SOCK
+    if os.environ.get("XDR_SINGLETON_GUARD", "1").lower() in ("0", "false", "no"):
+        return
+    try:
+        guard_port = int(os.environ.get("XDR_SINGLETON_GUARD_PORT", "8123"))
+    except ValueError:
+        guard_port = 8123
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Deliberately do NOT set SO_REUSEADDR here — we WANT a second bind to fail.
+    try:
+        sock.bind(("127.0.0.1", guard_port))
+        sock.listen(1)
+    except OSError:
+        logger.critical(
+            "ANOTHER CYBER SENTINEL BACKEND IS ALREADY RUNNING "
+            "(singleton guard port %d is in use). Refusing to start a second "
+            "instance — a duplicate backend would split traffic on port 8000 and "
+            "break the agent + dashboard. Stop the other backend first, or set "
+            "XDR_SINGLETON_GUARD=0 to override.", guard_port,
+        )
+        try:
+            sock.close()
+        except Exception:
+            pass
+        sys.exit(1)
+    _SINGLETON_GUARD_SOCK = sock  # keep the lock for the process lifetime
+    logger.info("Single-instance lock acquired on 127.0.0.1:%d", guard_port)
+
+
+_acquire_singleton_lock()
+
+# ---------------------------------------------------------------------------
 # MongoDB (optional — gracefully degrades if unavailable)
 # ---------------------------------------------------------------------------
 try:
@@ -592,12 +643,57 @@ async def _sysmon_ps_loop() -> None:
         except Exception as exc:
             logger.debug(f"Sysmon PS forwarder: loop error: {exc}")
 
-_SURICATA_CMD = [
-    r"C:\Program Files\Suricata\suricata.exe",
-    "-c", r"C:\Program Files\Suricata\suricata.yaml",
-    "-i", r"\Device\NPF_{B5A75558-6CB6-473B-B521-5B390F7ADE47}",
-    "-l", r"C:\SuricataLogs",
-]
+def _detect_capture_interface() -> str:
+    """Resolve the Suricata ``-i`` device path for the active capture NIC.
+
+    Precedence:
+      1. ``XDR_SURICATA_INTERFACE`` env var (full ``\\Device\\NPF_{GUID}`` or bare ``{GUID}``).
+      2. Auto-detect: the 'Up' adapter that owns the default IPv4 gateway — i.e. the
+         NIC actually carrying traffic — via Get-NetAdapter. This is why capture
+         works on Wi-Fi OR Ethernet with no hardcoded GUID that silently breaks when
+         an adapter is reinstalled (the previous hardcoded GUID no longer existed on
+         this machine, so Suricata bound a dead interface → "0 flows").
+      3. Fallback to the first 'Up' adapter's GUID.
+
+    Returns a ``\\Device\\NPF_{GUID}`` string.
+    """
+    override = os.environ.get("XDR_SURICATA_INTERFACE", "").strip()
+    if override:
+        return override if override.lower().startswith(r"\device\npf_") else (r"\Device\NPF_" + override)
+
+    ps = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        "$g=Get-NetIPConfiguration|Where-Object{$_.IPv4DefaultGateway -ne $null}|Select-Object -First 1;"
+        "if($g){(Get-NetAdapter -InterfaceIndex $g.InterfaceIndex).InterfaceGuid}"
+        "else{(Get-NetAdapter|Where-Object{$_.Status -eq 'Up'}|Select-Object -First 1).InterfaceGuid}"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, text=True, timeout=15,
+            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+        ).stdout.strip()
+        if out.startswith("{") and out.endswith("}") and len(out) >= 34:
+            dev = r"\Device\NPF_" + out
+            logger.info("[SURICATA] auto-detected capture interface: %s", dev)
+            return dev
+        logger.warning("[SURICATA] interface auto-detect returned unexpected output: %r", out)
+    except Exception as exc:
+        logger.warning("[SURICATA] interface auto-detect failed: %s", exc)
+
+    fallback = r"\Device\NPF_{C7587D8E-1D41-4684-A70D-C30AEC5E8926}"
+    logger.warning("[SURICATA] falling back to hardcoded interface %s", fallback)
+    return fallback
+
+
+def _build_suricata_cmd() -> list:
+    """Build the Suricata command with the interface resolved at start time."""
+    return [
+        r"C:\Program Files\Suricata\suricata.exe",
+        "-c", r"C:\Program Files\Suricata\suricata.yaml",
+        "-i", _detect_capture_interface(),
+        "-l", r"C:\SuricataLogs",
+    ]
 _WINLOGBEAT_CMD = [
     str(_WINLOGBEAT_DIR / "winlogbeat.exe"),
     "-c", str(_WINLOGBEAT_DIR / "winlogbeat.yml"),
@@ -613,7 +709,7 @@ def _start_capture_processes() -> dict:
     _wb_log = _WINLOGBEAT_DIR / "logs" / "winlogbeat_stderr.log"
     _wb_log.parent.mkdir(parents=True, exist_ok=True)
 
-    _procs_to_start = [("suricata", _SURICATA_CMD, "_suricata_proc", None)]
+    _procs_to_start = [("suricata", _build_suricata_cmd(), "_suricata_proc", None)]
     if settings.start_winlogbeat:
         _procs_to_start.append(("winlogbeat", _WINLOGBEAT_CMD, "_winlogbeat_proc", str(_WINLOGBEAT_DIR)))
 
@@ -749,6 +845,13 @@ _CORS_ORIGINS: list[str] = list({
     "http://127.0.0.1:3000",
     f"http://{_local_ip}:3000",
     settings.frontend_url,
+    # Same-origin: when the backend serves the dashboard itself, the Socket.IO
+    # handshake Origin is the backend's own address on its own port. HTTP calls
+    # are same-origin (CORS doesn't apply), but the WS handshake is still checked
+    # against this list, so include the backend's serving origins.
+    f"http://{_local_ip}:{settings.backend_port}",
+    f"http://localhost:{settings.backend_port}",
+    f"http://127.0.0.1:{settings.backend_port}",
 })
 
 
@@ -1231,9 +1334,20 @@ async def _do_startup():
 
     # System monitor agent (optional — requires torch + system_model.pt)
     try:
+        # Interval between system-monitor inference ticks. Each tick runs the LSTM
+        # autoencoder + BehavioralDetector (torch + XGBoost + TF-IDF), which is CPU
+        # heavy; at the old 1 s default it pinned ~1 core continuously and starved
+        # the async event loop on a single machine, so the backend stopped answering
+        # the agent + dashboard shortly after Start Monitoring. 5 s cuts that load 5×
+        # with no meaningful loss of system-anomaly coverage. Override via env.
+        try:
+            _sysmon_interval = max(1, int(os.environ.get("XDR_SYSTEM_MONITOR_INTERVAL", "5")))
+        except ValueError:
+            _sysmon_interval = 5
         _system_agent = SystemMonitorAgent(
             model_dir=settings.model_dir,
             on_result=_handle_system_result,
+            interval_seconds=_sysmon_interval,
         )
         await _system_agent.start()
         _bdet_status = _system_agent.status()
@@ -1605,9 +1719,30 @@ except Exception as _sig_setup_exc:
 # ---------------------------------------------------------------------------
 # Lifespan context manager (modern replacement for @app.on_event)
 # ---------------------------------------------------------------------------
+def _quiet_loop_exception_handler(loop, context):
+    """Swallow the benign ConnectionResetError [WinError 10054] that Windows'
+    ProactorEventLoop logs whenever a client (browser Socket.IO reconnect,
+    endpoint agent, dashboard poll) drops a TCP connection before the server
+    finishes writing. These are harmless — the peer is simply gone — but under
+    reconnect storms they flood the log and add real overhead. Everything else
+    is delegated to the default handler so genuine errors are never hidden."""
+    exc = context.get("exception")
+    if isinstance(exc, ConnectionResetError):
+        return
+    msg = context.get("message", "") or ""
+    if "_call_connection_lost" in msg or "SHUT_RDWR" in msg:
+        return
+    loop.default_exception_handler(context)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     await _do_startup()
+    # Quiet the harmless WinError 10054 connection-reset spam (see handler above).
+    try:
+        asyncio.get_running_loop().set_exception_handler(_quiet_loop_exception_handler)
+    except Exception:
+        pass
     try:
         yield
     except asyncio.CancelledError:
@@ -3321,6 +3456,17 @@ _MALWARE_WATCH_PATHS = [
 _MALWARE_WATCH_EXTS = {".exe", ".dll", ".sys", ".scr"}
 _MALWARE_SCAN_INTERVAL = int(os.getenv("MALWARE_SCAN_INTERVAL", "120"))  # seconds
 
+# Directory names that are huge, noisy, and not realistic malware drop zones for
+# this watcher. Pruning them keeps the periodic filesystem walk fast. Without this
+# the walk of C:\Users (AppData, node_modules, caches, …) can take tens of seconds.
+_MALWARE_WALK_PRUNE_DIRS = {
+    "node_modules", "appdata", "application data", "$recycle.bin",
+    "windows", "site-packages", "__pycache__", "venv", "env",
+    ".cache", "cache", "temporary internet files", ".git", ".svn",
+}
+# Hard cap on PE files collected per cycle so a pathological tree can't blow up.
+_MALWARE_WALK_MAX_FILES = 20000
+
 # {file_path: mtime} — tracks already-scanned files so only new/changed ones are processed
 _malware_seen: dict = {}
 
@@ -3328,6 +3474,60 @@ _malware_seen: dict = {}
 # Entries are re-emitted every _MALWARE_DIRECT_COOLDOWN seconds so a frontend
 # that connects AFTER the initial scan still receives Alert Stream entries.
 _malware_confirmed: dict = {}   # file_path → {"fusion": FusionResult, "result": dict, "ts": str, "shap": any}
+
+# Never scan the XDR install tree itself (the repo + its parent deployment folder).
+# Otherwise the watcher flags our own bundled tools/installers (e.g. npcap-*.exe)
+# as malware — a noisy false positive from the system scanning itself.
+_XDR_SKIP_ROOTS: tuple = tuple(
+    str(p).lower() for p in {
+        Path(__file__).resolve().parent.parent,          # cyber-sentinal-xdr-main (repo root)
+        Path(__file__).resolve().parent.parent.parent,   # deployment folder (contains installers)
+    }
+)
+
+
+def _scan_for_new_malware_files() -> list[str]:
+    """Synchronous walk of the watch paths for new/modified PE files.
+
+    Runs in a worker thread (via asyncio.to_thread) so the potentially huge
+    filesystem walk NEVER blocks the async event loop — a blocking rglob over
+    C:\\Users previously froze the loop for tens of seconds each cycle, which
+    timed out the endpoint agent and the dashboard. Prunes big noise subtrees
+    (AppData, node_modules, caches) and caps the number of PE files per cycle.
+    """
+    new_files: list[str] = []
+    examined = 0
+    for watch_dir in _MALWARE_WATCH_PATHS:
+        if not os.path.isdir(watch_dir):
+            continue
+        try:
+            for root, dirs, files in os.walk(watch_dir):
+                # Skip the XDR install tree entirely (don't flag our own tools).
+                if _XDR_SKIP_ROOTS and root.lower().startswith(_XDR_SKIP_ROOTS):
+                    dirs[:] = []
+                    continue
+                # Prune noisy / huge subtrees in-place so os.walk never descends them.
+                dirs[:] = [
+                    d for d in dirs
+                    if d.lower() not in _MALWARE_WALK_PRUNE_DIRS and not d.startswith(".")
+                ]
+                for fname in files:
+                    if os.path.splitext(fname)[1].lower() not in _MALWARE_WATCH_EXTS:
+                        continue
+                    fpath = os.path.join(root, fname)
+                    try:
+                        mtime = os.path.getmtime(fpath)
+                    except OSError:
+                        continue
+                    if _malware_seen.get(fpath) != mtime:
+                        _malware_seen[fpath] = mtime
+                        new_files.append(fpath)
+                    examined += 1
+                    if examined >= _MALWARE_WALK_MAX_FILES:
+                        return new_files
+        except Exception as walk_err:
+            logger.debug(f"Malware watcher walk error in {watch_dir}: {walk_err}")
+    return new_files
 
 
 async def _malware_scan_loop():
@@ -3360,27 +3560,9 @@ async def _malware_scan_loop():
                     except Exception as _cf_err:
                         logger.debug("[MALWARE] re-emit confirmed malicious failed for %s: %s", _cf_path, _cf_err)
 
-                new_files: list[str] = []
-                for watch_dir in _MALWARE_WATCH_PATHS:
-                    p = Path(watch_dir)
-                    if not p.is_dir():
-                        continue
-                    try:
-                        for fpath in p.rglob("*"):
-                            if not fpath.is_file():
-                                continue
-                            if fpath.suffix.lower() not in _MALWARE_WATCH_EXTS:
-                                continue
-                            try:
-                                mtime = fpath.stat().st_mtime
-                            except OSError:
-                                continue
-                            key = str(fpath)
-                            if _malware_seen.get(key) != mtime:
-                                _malware_seen[key] = mtime
-                                new_files.append(key)
-                    except Exception as walk_err:
-                        logger.debug(f"Malware watcher walk error in {watch_dir}: {walk_err}")
+                # Run the (potentially large) filesystem walk in a worker thread so
+                # it never blocks the async event loop / starves the endpoint agent.
+                new_files = await asyncio.to_thread(_scan_for_new_malware_files)
 
                 if new_files:
                     logger.info(f"Malware watcher: scanning {len(new_files)} new/modified files")
@@ -5650,6 +5832,15 @@ async def _server_soar_executor(action: str, target: str, parameters: dict) -> t
     import re as _re
     import shutil as _shutil
 
+    # Safety net: this executor only ever runs for endpoint_id="server_host", so a
+    # power action reaching here would shut down / sleep the SOC box itself. The
+    # /endpoint/command endpoint already blocks this, but refuse defensively too.
+    if action in ("shutdown_host", "sleep_host"):
+        return True, (
+            f"ADVISORY: {action} is not executed on the SOC server host "
+            "(would take the dashboard offline); target a remote endpoint instead."
+        )
+
     # Full paths to Windows executables — immune to PATH manipulation in service contexts.
     _NETSH_EXE    = r"C:\Windows\System32\netsh.exe"
     _NET_EXE      = r"C:\Windows\System32\net.exe"
@@ -6412,7 +6603,12 @@ _ENDPOINT_VALID_ACTIONS = frozenset({
     "isolate_host", "unisolate_host", "quarantine_file", "restore_quarantine_file",
     "lock_account", "unlock_account",
     "scan_filesystem", "monitor_persistence",
+    "shutdown_host", "sleep_host",
 })
+# Power-state actions are destructive and irreversible from the SOC (a shut-down
+# machine can only be powered back on physically).  They must NEVER target the
+# backend/SOC host itself, or clicking one would take the dashboard offline.
+_POWER_ACTIONS = frozenset({"shutdown_host", "sleep_host"})
 # Advisory actions are generated by the response engine but must NOT be forwarded
 # to the endpoint agent — they are logged/acknowledged server-side only.
 _ADVISORY_ACTIONS = frozenset({
@@ -6429,6 +6625,26 @@ _ADVISORY_ACTIONS = frozenset({
     "collect_forensics",
 })
 _ENDPOINT_INGEST_RATE_LIMIT_SECONDS = 2.0
+
+# Per-endpoint guard: at most one background ML-scoring task per endpoint at a
+# time. Heavy scoring (RandomForest over up to 50 flows + LightGBM + user/system
+# models) can exceed the 5-s telemetry cadence; without this guard the tasks pile
+# up and ingest latency compounds until the agent times out. Overlapping ticks are
+# dropped (telemetry is still persisted) instead of queued.
+_endpoint_scoring_inflight: set = set()
+
+
+def _scoring_task_done(task, endpoint_id: str) -> None:
+    """Done-callback for the background scoring task: always clear the in-flight
+    flag (so the next tick can score), and surface any failure to the log."""
+    _endpoint_scoring_inflight.discard(endpoint_id)
+    try:
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                logger.error("[ENDPOINT_AI] background scoring failed: %s", exc)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Contact form rate-limiter — 3 submissions per IP per hour (in-memory)
@@ -6456,7 +6672,7 @@ async def endpoint_ingest(payload: EndpointTelemetry):
     )
 
     # Debug: log the top-level keys present in the incoming payload
-    _payload_dict = payload.dict()
+    _payload_dict = payload.model_dump()
     logger.debug(f"Ingest payload keys: {list(_payload_dict.keys()) if isinstance(_payload_dict, dict) else type(_payload_dict)}")
 
     # --- Rate limit: 1 ingest per 2 s per endpoint_id ---
@@ -6609,7 +6825,29 @@ async def endpoint_ingest(payload: EndpointTelemetry):
 
     asyncio.create_task(_analyze())
 
-    # 4. AI-powered scoring + unified fusion pipeline
+    # 4. Decouple heavy ML scoring from the HTTP response.
+    #    ACK the agent immediately, then run scoring + fusion in the background
+    #    (guarded so ticks can't pile up). This eliminates the ingest timeouts /
+    #    "backend unreachable" / connection-reset errors the agent used to log:
+    #    scoring latency no longer holds the /endpoint/ingest response open.
+    if ep.endpoint_id in _endpoint_scoring_inflight:
+        # Previous scoring for this endpoint is still running — drop this tick's
+        # scoring (telemetry is already persisted above) to prevent backlog.
+        return {"status": "ok", "endpoint_id": ep.endpoint_id, "scored": False}
+    _endpoint_scoring_inflight.add(ep.endpoint_id)
+    _score_task = asyncio.create_task(_endpoint_score_and_fuse(payload, ep, now_iso))
+    _score_task.add_done_callback(
+        lambda _t, _eid=ep.endpoint_id: _scoring_task_done(_t, _eid)
+    )
+    return {"status": "ok", "endpoint_id": ep.endpoint_id, "scored": True}
+
+
+async def _endpoint_score_and_fuse(payload, ep, now_iso) -> None:
+    """Heavy per-endpoint ML scoring + fusion, run as a background task so the
+    /endpoint/ingest HTTP response returns immediately (no agent-side timeouts).
+    Emits the same Socket.IO events (fusion_alert, user_anomaly, network, …) as
+    before — only their timing relative to the ACK changed. The in-flight guard
+    in the handler ensures at most one of these runs per endpoint at a time."""
     cpu_val    = payload.system.get("cpu_percent", 0)
     mem_val    = payload.system.get("memory_percent", 0)
     system_data = payload.system
@@ -7269,18 +7507,40 @@ async def endpoint_command_ack(payload: EndpointCommandAck):
 
 
 @app.post("/endpoint/command", dependencies=[Depends(_require_key_or_jwt)])
-async def endpoint_send_command(payload: SendCommand):
+async def endpoint_send_command(payload: SendCommand, request: Request):
     """
     Dashboard or SOAR engine issues a command to a specific endpoint.
     Validates action and endpoint_id existence, inserts into endpoint_commands,
     and emits a command_queued Socket.IO event.
+
+    AuthZ: API key OR a JWT with analyst/admin role. Viewer-role JWTs receive
+    HTTP 403 — closes the gap where a signed-in viewer could bypass the hidden
+    UI and issue SOAR commands (incl. shutdown_host/sleep_host) directly.
     """
+    # Enforce analyst/admin role for JWT callers. API-key callers (trusted
+    # automation) return role=None here and are allowed through.
+    _jwt_role = _decode_jwt_role(request)
+    if _jwt_role is not None and _jwt_role not in ("admin", "analyst"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Analyst or admin role required to issue endpoint commands. Your role: {_jwt_role}",
+        )
+
     # Validate action
     if payload.action not in _ENDPOINT_VALID_ACTIONS:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid action {payload.action!r}. "
                    f"Must be one of: {sorted(_ENDPOINT_VALID_ACTIONS)}",
+        )
+
+    # Never allow a power action (shutdown/sleep) to target the SOC/backend host
+    # itself — doing so would take the dashboard and detection pipeline offline.
+    if payload.action in _POWER_ACTIONS and payload.endpoint_id == "server_host":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Action {payload.action!r} cannot target the SOC server host "
+                   f"(server_host). Select a remote endpoint instead.",
         )
 
     # Validate endpoint exists in registry
@@ -7531,11 +7791,18 @@ async def endpoint_honeypot(body: dict = Body(...)):
         endpoint_id, hostname, len(docs), len(attacker_ips), ports,
     )
 
-    # Dedicated event for the deception panel
+    # Dedicated event for the deception panel. Each hit doc carries a `ts_dt`
+    # datetime (for MongoDB TTL); Socket.IO JSON-encodes the payload and a raw
+    # datetime is NOT serializable, which previously raised
+    # "TypeError: Object of type datetime is not JSON serializable", 500'd this
+    # endpoint, and stopped honeypot hits from ever reaching the dashboard. Emit
+    # a JSON-safe copy of the hits with `ts_dt` removed (the UI uses the string
+    # timestamp / last_seen fields, not ts_dt).
+    _socket_hits = [{k: v for k, v in d.items() if k != "ts_dt"} for d in docs]
     await sio.emit("honeypot_alert", _strip_mongo({
         "endpoint_id":   endpoint_id,
         "hostname":      hostname,
-        "hits":          docs,
+        "hits":          _socket_hits,
         "attacker_ips":  sorted(attacker_ips),
         "decoy_ports":   ports,
         "count":         len(docs),
@@ -10992,6 +11259,44 @@ async def submit_contact_inquiry(
     )
 
     return {"submitted": True, "ticket_id": ticket_id}
+
+
+# ---------------------------------------------------------------------------
+# Static dashboard serving (same-origin).
+# Registered LAST, after every API route, so it never shadows them. When the
+# built React dashboard is present, the backend serves it — the SPA, REST API,
+# and Socket.IO then share one origin, so the frontend needs no hardcoded
+# backend URL (config.ts resolves BACKEND_URL to window.location.origin).
+# /socket.io is handled by the socketio ASGIApp wrapper before FastAPI, so it
+# is never caught here.
+# ---------------------------------------------------------------------------
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+_frontend_dir = Path(settings.frontend_dir)
+if _frontend_dir.is_dir() and (_frontend_dir / "index.html").is_file():
+    _static_subdir = _frontend_dir / "static"
+    if _static_subdir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(_static_subdir)), name="dashboard-static")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _serve_dashboard(full_path: str):
+        # Serve a real file when it exists (favicon.ico, manifest.json, logo.jpg,
+        # Sounds/, team/, ...); otherwise fall back to index.html so React Router
+        # handles client-side routes. Path-traversal guarded via relative_to.
+        index = _frontend_dir / "index.html"
+        if full_path:
+            candidate = (_frontend_dir / full_path).resolve()
+            try:
+                candidate.relative_to(_frontend_dir.resolve())
+                if candidate.is_file():
+                    return FileResponse(str(candidate))
+            except ValueError:
+                pass
+        return FileResponse(str(index))
+
+    logger.info("Dashboard served same-origin from %s", _frontend_dir)
+else:
+    logger.info("Dashboard build not found at %s — running API-only", _frontend_dir)
 
 
 # ---------------------------------------------------------------------------

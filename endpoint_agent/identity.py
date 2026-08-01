@@ -11,6 +11,7 @@ import logging
 import os
 import platform
 import socket
+import sys
 import uuid
 from pathlib import Path
 
@@ -20,8 +21,32 @@ logger = logging.getLogger(__name__)
 
 AGENT_VERSION = "1.0.0"
 
-# endpoint_config.json lives next to identity.py (i.e. inside endpoint_agent/)
-_CONFIG_PATH = Path(__file__).parent / "endpoint_config.json"
+
+def data_dir() -> Path:
+    """
+    Return the writable directory where the agent persists state that must
+    survive restarts (endpoint_config.json, isolation flag, quarantine/).
+
+    - Frozen (PyInstaller .exe): use %PROGRAMDATA%\\CyberSentinel. This is
+      CRITICAL — a frozen onefile exe's __file__ points at a temporary
+      extraction folder that is deleted on exit, so persisting next to __file__
+      would regenerate the endpoint UUID on every launch. Falls back to the
+      directory containing the .exe if ProgramData is not writable.
+    - Script mode (python agent.py): the endpoint_agent package directory, so
+      developer runs keep config alongside the source as before.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "CyberSentinel"
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            return base
+        except OSError:
+            return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+# endpoint_config.json lives in the persistent data dir (see data_dir()).
+_CONFIG_PATH = data_dir() / "endpoint_config.json"
 
 # Interface names that are always loopback and must be skipped
 _LOOPBACK_NAMES = {"lo", "loopback"}

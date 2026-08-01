@@ -18,8 +18,15 @@ logger = logging.getLogger(__name__)
 
 import os as _os
 
-# Path to xdr_runtime.py and model artifacts relative to this file
-_XDR_DIR = Path(__file__).parent.parent.parent / "User Behavior" / "final_model_backend_only"
+# Path to xdr_runtime.py and model artifacts.
+# In a PyInstaller-frozen build the modules live at <_MEIPASS>/agents while the
+# bundled "User Behavior/..." data tree is rooted at _MEIPASS — so __file__-relative
+# navigation (parent.parent.parent) overshoots by the _internal layer. Resolve from
+# sys._MEIPASS when frozen; fall back to the dev layout otherwise.
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    _XDR_DIR = Path(sys._MEIPASS) / "User Behavior" / "final_model_backend_only"
+else:
+    _XDR_DIR = Path(__file__).parent.parent.parent / "User Behavior" / "final_model_backend_only"
 sys.path.insert(0, str(_XDR_DIR))
 
 # Absolute paths to model artifacts — used by score_session_telemetry()

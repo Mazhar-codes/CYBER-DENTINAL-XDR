@@ -17,6 +17,12 @@ dist/
 build/
 .DS_Store
 
+# Packaging build outputs & per-host runtime files (never commit)
+build_env/
+packaging/installer/redist/
+endpoint_agent/endpoint_config.json
+endpoint_agent/isolation_flag.txt
+
 # Raw ML training datasets (tens of GB) — kept local only, never pushed
 Network Behavior/CICDS_dataset/
 Network Behavior/Wire shark/

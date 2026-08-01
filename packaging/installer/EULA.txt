@@ -1,0 +1,63 @@
+CYBER SENTINEL XDR — END USER LICENSE AGREEMENT
+================================================
+
+IMPORTANT — READ CAREFULLY BEFORE INSTALLING.
+
+By clicking "I accept" and installing Cyber Sentinel XDR ("the Software"), you
+agree to be bound by the terms of this Agreement. If you do not agree, do not
+install the Software.
+
+1. LICENSE GRANT
+   You are granted a non-exclusive, non-transferable license to install and use
+   the Software on computers that you own or are otherwise expressly authorized
+   to monitor and administer.
+
+2. AUTHORIZED USE ONLY (IMPORTANT)
+   The Software is an Extended Detection and Response (XDR) platform. It actively
+   monitors endpoint activity and can execute automated and operator-initiated
+   RESPONSE ACTIONS on the machines it is installed on, including but not limited
+   to: isolating a host from the network, blocking network addresses, terminating
+   processes, quarantining files, disabling user accounts, and SHUTTING DOWN or
+   SLEEPING the endpoint.
+
+   You represent and warrant that you will install and operate the Software ONLY
+   on systems and networks that you own or for which you have obtained explicit,
+   documented authorization from the system owner. Deploying the Software to
+   monitor or control computers without authorization may be illegal and is
+   strictly prohibited.
+
+3. ADMINISTRATOR PRIVILEGES
+   The Software requires Administrator privileges to install and to perform
+   response actions. You acknowledge that granting these privileges is necessary
+   for the Software to function.
+
+4. DATA COLLECTION
+   The endpoint agent collects system, network, user-session, and process
+   telemetry and transmits it to the server component you configure. You are
+   responsible for the security, storage, and lawful handling of that data.
+
+5. THIRD-PARTY COMPONENTS
+   The Software may rely on or integrate with third-party tools (e.g. Sysmon,
+   Suricata, Winlogbeat, MongoDB). Those components are governed by their own
+   licenses, which you agree to observe.
+
+6. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IT IS NOT A CERTIFIED
+   OR GUARANTEED SECURITY CONTROL AND SHOULD NOT BE RELIED UPON AS THE SOLE MEANS
+   OF PROTECTING ANY SYSTEM.
+
+7. LIMITATION OF LIABILITY
+   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+   DAMAGES, OR OTHER LIABILITY (INCLUDING DATA LOSS, BUSINESS INTERRUPTION, OR
+   LOSS OF ACCESS TO A HOST CAUSED BY A RESPONSE ACTION SUCH AS ISOLATION,
+   ACCOUNT LOCKOUT, OR SHUTDOWN), WHETHER IN AN ACTION OF CONTRACT, TORT, OR
+   OTHERWISE, ARISING FROM OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+8. ACADEMIC / RESEARCH SOFTWARE
+   This Software is developed as an academic / research project. It is intended
+   for use in controlled, authorized environments.
+
+By proceeding with installation you acknowledge that you have read, understood,
+and agree to be bound by this Agreement.

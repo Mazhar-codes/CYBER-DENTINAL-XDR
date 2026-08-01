@@ -10,9 +10,38 @@ python-dotenv is optional — if absent the module still works and values fall
 through to os.environ / the hardcoded defaults below.
 """
 import os
+import sys
 from pathlib import Path
 
-BASE_DIR = Path(__file__).parent
+# Frozen-aware base + data roots.
+#   BASE_DIR   — where the READ-ONLY model artifacts live.
+#   DATA_ROOT  — WRITABLE runtime output (reports, etc.).
+#
+# script mode (dev):
+#   BASE_DIR  = Backend/ (this file's dir); models load from BASE_DIR and the
+#               sibling folders under BASE_DIR.parent (the repo root).
+#   DATA_ROOT = the repo root, matching the existing on-disk layout.
+#
+# frozen backend.exe (PyInstaller onedir):
+#   BASE_DIR  = <bundle>/Backend  — the spec bundles model files preserving the
+#               dev layout (<bundle>/Backend, <bundle>/User Behavior, ...), so
+#               BASE_DIR.parent still resolves the sibling model folders.
+#   DATA_ROOT = %PROGRAMDATA%\CyberSentinel\server — writable and stable
+#               (the install dir is read-only for a service account).
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys._MEIPASS) / "Backend"
+    DATA_ROOT = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "CyberSentinel" / "server"
+else:
+    BASE_DIR = Path(__file__).parent
+    DATA_ROOT = BASE_DIR.parent
+
+# Built React dashboard directory, served same-origin by the backend.
+#   dev:    <repo>/Cyber Sentinal XDR Frontend/build
+#   frozen: <bundle>/frontend  (backend.spec bundles the build/ folder there)
+if getattr(sys, "frozen", False):
+    _FRONTEND_DEFAULT = Path(sys._MEIPASS) / "frontend"
+else:
+    _FRONTEND_DEFAULT = BASE_DIR.parent / "Cyber Sentinal XDR Frontend" / "build"
 
 # ---------------------------------------------------------------------------
 # Load .env (project root preferred, Backend/ as fallback)
@@ -42,6 +71,7 @@ class _Settings:
     suricata_eve_path: str = _env("SURICATA_EVE_PATH", r"C:\SuricataLogs\eve.json")
     sysmon_log_path: str = _env("SYSMON_LOG_PATH", r"C:\winlogbeat\logs\sysmon_events.json")
     sysmon_model_dir: str = _env("SYSMON_MODEL_DIR", str(BASE_DIR.parent / "System Behavior" / "System_Behavior_Model" / "DETECTOR1" / "saved_model_v3"))
+    frontend_dir: str = _env("XDR_FRONTEND_DIR", str(_FRONTEND_DEFAULT))
 
     # --- Server ---
     backend_host: str = _env("BACKEND_HOST", "0.0.0.0")
@@ -106,7 +136,7 @@ class _Settings:
     # --- Incident reports ---
     # Directory where PDF incident reports are saved.
     # Override with XDR_REPORTS_DIR env var for non-default deployments.
-    reports_dir: str = _env("XDR_REPORTS_DIR", r"D:\Cyber Sentinal\reports")
+    reports_dir: str = _env("XDR_REPORTS_DIR", str(DATA_ROOT / "reports"))
 
     # --- SOAR ---
     # Network interface name used by isolate_host SOAR action on the server host.
@@ -121,7 +151,7 @@ class _Settings:
         r"C:\Windows\Temp",
         r"C:\ProgramData",
         r"C:\Downloads",
-        r"D:\Cyber Sentinal",
+        str(DATA_ROOT),
     ]
 
 

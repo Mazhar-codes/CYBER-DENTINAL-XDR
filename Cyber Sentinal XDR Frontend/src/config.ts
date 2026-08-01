@@ -1,16 +1,19 @@
 /**
- * Backend URL — resolved at runtime from the browser's own hostname.
+ * Backend URL.
  *
- * When the user opens the dashboard via a LAN IP (e.g. http://10.173.3.60:3000)
- * the backend is always on the same machine, so we derive the URL from the
- * hostname directly.  This means switching networks (lab → hotspot → home)
- * never requires touching .env or restarting the dev-server.
+ * Resolution priority:
+ *   1. REACT_APP_BACKEND_URL if set at build time. Used in development
+ *      (`npm start` on :3000 while the backend runs on another port) and for
+ *      custom deployments where the API lives on a different host.
+ *   2. Otherwise SAME-ORIGIN (`window.location.origin`). This is the packaged /
+ *      production case: the backend itself serves these static dashboard files,
+ *      so the REST API and Socket.IO are on the exact same origin the page was
+ *      loaded from — any host, any port, http or https. No hardcoded IP, no
+ *      per-install rebuild.
  *
- * localhost / 127.0.0.1 fall back to REACT_APP_BACKEND_URL (or localhost:8000)
- * for cases where the backend might be on a different machine.
+ * The production build ships with REACT_APP_BACKEND_URL empty (see
+ * .env.production) so it always resolves to same-origin.
  */
-const _hostname = window.location.hostname;
-export const BACKEND_URL =
-  _hostname !== "localhost" && _hostname !== "127.0.0.1"
-    ? `http://${_hostname}:8000`
-    : (process.env.REACT_APP_BACKEND_URL ?? "http://localhost:8000");
+const _envUrl = (process.env.REACT_APP_BACKEND_URL ?? "").trim();
+
+export const BACKEND_URL = _envUrl !== "" ? _envUrl : window.location.origin;

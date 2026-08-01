@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import LoginPage from '../pages/LoginPage';
-import DemoModeButton from './shared/DemoModeButton';
 
 /**
  * StartupScreen — cinematic iframe intro.
@@ -65,12 +64,6 @@ const StartupScreen: React.FC = () => {
         style={{ width: '100%', height: '100%', border: 'none' }}
         title="Cyber Sentinel XDR Intro"
       />
-
-      {/* Demo Mode bypass — mounted here at the top level (not inside the
-          pointerEvents:'none' overlay below) so it's clickable from the very
-          first frame, without waiting for the user to scroll to the last
-          cinematic scene. */}
-      <DemoModeButton />
 
       {/*
        * Real LoginPage overlaid on the cinematic background.

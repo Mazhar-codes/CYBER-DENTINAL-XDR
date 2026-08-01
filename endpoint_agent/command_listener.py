@@ -42,8 +42,10 @@ _IP_RE = re.compile(
     r"(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$"
 )
 
-# Files written by the agent itself
-_AGENT_DIR = Path(__file__).parent
+# Files written by the agent itself — persisted in the frozen-aware data dir so
+# quarantine/ and the isolation flag survive across restarts of a packaged .exe
+# (see identity.data_dir()).
+_AGENT_DIR = _identity_mod.data_dir()
 QUARANTINE_DIR = _AGENT_DIR / "quarantine"
 _ISOLATION_FLAG = _AGENT_DIR / "isolation_flag.txt"
 
@@ -58,6 +60,12 @@ _SUBPROCESS_TIMEOUT = 15
 _NETSH  = r"C:\Windows\System32\netsh.exe"
 _NET    = r"C:\Windows\System32\net.exe"
 _SCHTASKS = r"C:\Windows\System32\schtasks.exe"
+_SHUTDOWN = r"C:\Windows\System32\shutdown.exe"
+_RUNDLL32 = r"C:\Windows\System32\rundll32.exe"
+_POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+
+# Grace period (seconds) shown to the user before a power action takes effect.
+_POWER_GRACE_SECONDS = 30
 
 # Suppress console windows on all subprocess calls — required so that no
 # UAC or CMD popups appear when the agent executes SOAR actions silently.
@@ -367,6 +375,8 @@ async def execute_command(cmd: dict[str, Any], simulate: bool = False) -> dict[s
         "unlock_account":      lambda: _action_unlock_account(target, simulate),
         "scan_filesystem":     lambda: _action_scan_filesystem(target, simulate),
         "monitor_persistence": lambda: _action_monitor_persistence(target, simulate),
+        "shutdown_host":       lambda: _action_shutdown_host(simulate),
+        "sleep_host":          lambda: _action_sleep_host(simulate),
     }
 
     handler = dispatch.get(action)
@@ -1172,3 +1182,116 @@ def _action_monitor_persistence(target: str, simulate: bool) -> dict[str, Any]:
         findings["scheduled_tasks"],
     )
     return {"success": True, "message": json.dumps(findings), **findings}
+
+
+def _action_shutdown_host(simulate: bool) -> dict[str, Any]:
+    """
+    Schedule a full shutdown of this endpoint after a grace period.
+
+    Uses ``shutdown /s /t <grace> /c "<message>"`` which shows the user Windows'
+    own countdown warning dialog before powering off.  The action is reversible
+    ONLY within the grace window via ``shutdown /a`` (abort) — once the machine
+    powers off it can only be restarted by physically powering it back on.
+
+    shutdown.exe returns immediately after scheduling (the OS handles the timer),
+    so this handler does not block the agent's command loop.
+    """
+    grace = _POWER_GRACE_SECONDS
+    warn_msg = (
+        "Security Operations Center: this machine has been flagged and will "
+        f"SHUT DOWN in {grace} seconds. Save your work now."
+    )
+
+    if simulate:
+        return {"success": True, "message": f"[SIM] Would shut down host in {grace}s"}
+
+    system = platform.system()
+    if system != "Windows":
+        return {"success": False, "message": f"shutdown_host not supported on {system} (Windows only)"}
+
+    # /s = shutdown, /t = grace seconds, /c = message shown to the user, /f = force-close apps
+    cmd = [_SHUTDOWN, "/s", "/t", str(grace), "/c", warn_msg, "/f"]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT,
+            shell=False,                  # security requirement — never shell=True
+            creationflags=_NO_WINDOW,     # suppress console popup
+        )
+        if result.returncode == 0:
+            logger.warning("SHUTDOWN SCHEDULED — host powers off in %ds", grace)
+            return {
+                "success": True,
+                "message": (
+                    f"Shutdown scheduled — host powers off in {grace}s "
+                    "(abortable on the host with 'shutdown /a')"
+                ),
+            }
+        out = (result.stderr or result.stdout).strip()
+        logger.error("shutdown_host failed rc=%d: %s", result.returncode, out)
+        return {"success": False, "message": out or f"shutdown exited {result.returncode}"}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "message": "shutdown_host timed out"}
+    except Exception as exc:
+        logger.error("shutdown_host exception: %s", exc)
+        return {"success": False, "message": str(exc)}
+
+
+def _action_sleep_host(simulate: bool) -> dict[str, Any]:
+    """
+    Put this endpoint to sleep after a grace period.
+
+    Windows' shutdown.exe has no native sleep verb, so this handler:
+      1. Best-effort notifies the interactive user with a msg popup.
+      2. Launches a detached PowerShell that waits <grace> seconds and then calls
+         SetSuspendState, so the agent's command loop is never blocked.
+
+    Note: SetSuspendState(0,...) requests SLEEP, but Windows will HIBERNATE
+    instead if hibernation is enabled on the host (run 'powercfg /hibernate off'
+    to guarantee sleep).  Sleep is fully reversible — any key/power press wakes
+    the machine and the agent resumes.
+    """
+    grace = _POWER_GRACE_SECONDS
+
+    if simulate:
+        return {"success": True, "message": f"[SIM] Would sleep host in {grace}s"}
+
+    system = platform.system()
+    if system != "Windows":
+        return {"success": False, "message": f"sleep_host not supported on {system} (Windows only)"}
+
+    # 1. Best-effort on-screen warning to every interactive session (msg.exe may be
+    #    absent on Home editions — never let its failure abort the sleep).
+    try:
+        subprocess.run(
+            [r"C:\Windows\System32\msg.exe", "*",
+             f"Security Operations Center: this machine will SLEEP in {grace} seconds."],
+            capture_output=True, text=True, timeout=10,
+            shell=False, creationflags=_NO_WINDOW,
+        )
+    except Exception as _msg_exc:
+        logger.debug("sleep_host user notification skipped: %s", _msg_exc)
+
+    # 2. Detached delayed-sleep worker — Popen (fire-and-forget) so we return now.
+    ps_command = (
+        f"Start-Sleep -Seconds {grace}; "
+        f"Start-Process -WindowStyle Hidden -FilePath '{_RUNDLL32}' "
+        "-ArgumentList 'powrprof.dll,SetSuspendState 0,1,0'"
+    )
+    try:
+        subprocess.Popen(
+            [_POWERSHELL, "-NonInteractive", "-NoProfile",
+             "-WindowStyle", "Hidden", "-Command", ps_command],
+            shell=False,
+            creationflags=_NO_WINDOW,
+        )
+        logger.warning("SLEEP SCHEDULED — host suspends in %ds", grace)
+        return {
+            "success": True,
+            "message": f"Sleep scheduled — host suspends in {grace}s (any keypress wakes it)",
+        }
+    except Exception as exc:
+        logger.error("sleep_host exception: %s", exc)
+        return {"success": False, "message": str(exc)}

@@ -321,6 +321,22 @@ async def register(
         )
 
     from config import settings  # noqa: PLC0415
+    import os as _os  # noqa: PLC0415
+
+    # Public self-registration is CLOSED for the shipped product. Accounts
+    # (admin / analyst / viewer) are provisioned by the operator directly in the
+    # database or via the admin User Management panel. The ONLY exception is
+    # bootstrapping the very first account when the users collection is empty,
+    # so a fresh install is never locked out. Re-open self-signup by setting
+    # XDR_ALLOW_REGISTRATION=true.
+    _allow_reg = _os.getenv("XDR_ALLOW_REGISTRATION", "false").strip().lower() in ("1", "true", "yes", "on")
+    if db["users"].count_documents({}) > 0 and not _allow_reg:
+        await _write_audit(db, payload.email, "register_blocked", ip, False,
+                           "Public registration disabled")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is disabled. Contact your administrator for an account.",
+        )
 
     if db["users"].find_one({"email": payload.email}):
         await _write_audit(db, payload.email, "register_failed", ip, False,

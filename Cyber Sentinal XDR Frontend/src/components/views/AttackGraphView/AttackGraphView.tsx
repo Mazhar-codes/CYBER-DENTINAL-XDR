@@ -213,9 +213,19 @@ export default function AttackGraphView({ onAlertCountChange, fusionHighThreshol
   }, [liveData.NODES.length]);
 
   // ── Mock data fallback ────────────────────────────────────────────────────
+  // Demo/mock nodes (DEV-MAC-12, WIN-DC01, c2.evilcdn.io, …) are OFF by default:
+  // showing fabricated "critical threats" that the operator has no real connection
+  // to is misleading in a live SOC. When there is no real attack data the graph
+  // now stays empty ("System Normal"). Set REACT_APP_ATTACK_GRAPH_DEMO=true to
+  // re-enable the canned demo graph for screenshots/presentations.
+  const ALLOW_MOCK = process.env.REACT_APP_ATTACK_GRAPH_DEMO === "true";
   const [useMock, setUseMock] = useState(false);
 
   useEffect(() => {
+    if (!ALLOW_MOCK) {
+      setUseMock(false);
+      return;
+    }
     if (isLoadingSnapshot) return;
     if (liveData.NODES.length > 0) {
       setUseMock(false);
@@ -225,7 +235,7 @@ export default function AttackGraphView({ onAlertCountChange, fusionHighThreshol
       if (liveData.NODES.length === 0) setUseMock(true);
     }, 5000);
     return () => clearTimeout(timer);
-  }, [isLoadingSnapshot, liveData.NODES.length]);
+  }, [ALLOW_MOCK, isLoadingSnapshot, liveData.NODES.length]);
 
   const displayData: GraphData = React.useMemo(() => {
     if (liveData.NODES.length > 0) return liveData;
