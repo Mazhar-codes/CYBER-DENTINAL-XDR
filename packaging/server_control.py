@@ -95,8 +95,9 @@ class ControlPanel(tk.Tk):
         super().__init__()
         self.title("Cyber Sentinel XDR - Server Control Panel")
         self.configure(bg=COLORS["bg"])
-        self.geometry("640x520")
-        self.resizable(False, False)
+        self.geometry("700x580")
+        self.minsize(600, 520)
+        self.resizable(True, True)
         self.entries = {}
         _, values = read_env()
         self._build_ui(values)
@@ -119,7 +120,7 @@ class ControlPanel(tk.Tk):
             ent = tk.Entry(form, textvariable=var, width=52, show=show,
                            bg=COLORS["entry"], fg=COLORS["fg"], insertbackground=COLORS["accent"],
                            relief="flat", font=("Consolas", 9))
-            ent.grid(row=i, column=1, sticky="w", padx=8)
+            ent.grid(row=i, column=1, sticky="ew", padx=8)
             self.entries[key] = var
             if key in ("XDR_API_KEY", "JWT_SECRET_KEY"):
                 tk.Button(form, text="Regenerate", command=lambda k=key: self._regen(k),
