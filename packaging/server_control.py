@@ -16,6 +16,7 @@ Layout when frozen (installed): {app}\server\
     .env                <- read/written here
 """
 import os
+import re
 import sys
 import glob
 import shutil
@@ -27,7 +28,7 @@ import webbrowser
 import urllib.request
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
@@ -186,7 +187,23 @@ class ControlPanel(tk.Tk):
 
         self.status = tk.Label(self, text="", bg=COLORS["bg"], fg=COLORS["muted"],
                                font=("Consolas", 9), wraplength=640, justify="center")
-        self.status.pack(pady=12)
+        self.status.pack(pady=(12, 2))
+
+        # --- Progress bar (hidden until a long operation runs, e.g. MongoDB install) ---
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")  # 'clam' honours custom colours reliably
+        except tk.TclError:
+            pass
+        style.configure("XDR.Horizontal.TProgressbar", troughcolor=COLORS["entry"],
+                        background=COLORS["accent"], bordercolor=COLORS["bg"],
+                        lightcolor=COLORS["accent"], darkcolor=COLORS["accent"])
+        self.progbar = ttk.Progressbar(self, style="XDR.Horizontal.TProgressbar",
+                                       mode="indeterminate", length=520)
+        self.prog_label = tk.Label(self, text="", bg=COLORS["bg"], fg=COLORS["accent"],
+                                   font=("Consolas", 8), wraplength=640, justify="center")
+        # Not packed yet - shown on demand via _progress_show().
+        self._progress_active = False
 
         row1 = tk.Frame(self, bg=COLORS["bg"]); row1.pack(pady=4)
         self._btn(row1, "Test Database", self._test_db, COLORS["accent"])
@@ -290,30 +307,133 @@ class ControlPanel(tk.Tk):
                 "(keep 'Install as a Windows Service' checked), then come back and click "
                 "'Setup Local DB' again.")
 
+    # ---- Progress bar helpers (thread-safe: worker threads call via self.after) ----
+    def _progress_show(self, text=""):
+        """Reveal the progress bar in animated (marquee) mode."""
+        if not self._progress_active:
+            self.progbar.pack(padx=40, pady=(2, 0), fill="x")
+            self.prog_label.pack(padx=30, pady=(2, 6))
+            self._progress_active = True
+        self.progbar.config(mode="indeterminate")
+        try:
+            self.progbar.start(12)
+        except tk.TclError:
+            pass
+        if text:
+            self.prog_label.config(text=text)
+
+    def _progress_text(self, text):
+        """Update the phase/percent line under the bar."""
+        if self._progress_active:
+            self.prog_label.config(text=text)
+
+    def _progress_percent(self, pct, text=""):
+        """Switch the bar to a precise value (0-100) when we have a real percentage."""
+        if not self._progress_active:
+            return
+        try:
+            self.progbar.stop()
+        except tk.TclError:
+            pass
+        self.progbar.config(mode="determinate", maximum=100, value=max(0, min(100, pct)))
+        if text:
+            self.prog_label.config(text=text)
+
+    def _progress_hide(self):
+        try:
+            self.progbar.stop()
+        except tk.TclError:
+            pass
+        if self._progress_active:
+            self.progbar.pack_forget()
+            self.prog_label.pack_forget()
+            self._progress_active = False
+
+    @staticmethod
+    def _winget_phase(line):
+        """Map a raw winget output line to a friendly phase message (or '' to ignore)."""
+        low = line.lower()
+        if "found" in low and "mongodb" in low:
+            return "Found MongoDB Community - starting download..."
+        if "downloading" in low:
+            return "Downloading MongoDB Community..."
+        if "verifying" in low or "hash" in low:
+            return "Verifying download..."
+        if "installing" in low:
+            return "Installing MongoDB (this is the longest step)..."
+        if "successfully installed" in low or "successfully" in low:
+            return "Install finished - starting the database service..."
+        if "restart" in low:
+            return "Install finished - a restart may be required."
+        return ""
+
     def _winget_install(self):
-        self.status.config(text="Installing MongoDB via winget - this can take several minutes...", fg=COLORS["accent"])
+        self.after(0, lambda: self._progress_show("Preparing to install MongoDB Community via winget..."))
+        self.after(0, lambda: self.status.config(
+            text="Installing MongoDB - keep this window open, it can take several minutes.",
+            fg=COLORS["accent"]))
+
         def work():
             try:
-                subprocess.run(["winget", "install", "-e", "--id", "MongoDB.Server",
-                                "--accept-package-agreements", "--accept-source-agreements"],
-                               capture_output=True, text=True)
+                proc = subprocess.Popen(
+                    ["winget", "install", "-e", "--id", "MongoDB.Server",
+                     "--accept-package-agreements", "--accept-source-agreements",
+                     "--disable-interactivity"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                    bufsize=1, creationflags=CREATE_NO_WINDOW)
             except FileNotFoundError:
-                self.status.config(text="winget not available - opening the MongoDB download page...", fg=COLORS["bad"])
-                webbrowser.open("https://www.mongodb.com/try/download/community"); return
+                self.after(0, self._progress_hide)
+                self.after(0, lambda: self.status.config(
+                    text="winget not available - opening the MongoDB download page...", fg=COLORS["bad"]))
+                webbrowser.open("https://www.mongodb.com/try/download/community")
+                return
             except Exception as e:
-                self.status.config(text="Install error: " + str(e)[:80], fg=COLORS["bad"]); return
-            # MSI installs the service; make sure it's running
+                self.after(0, self._progress_hide)
+                self.after(0, lambda: self.status.config(text="Install error: " + str(e)[:80], fg=COLORS["bad"]))
+                return
+
+            # Stream winget output live. When a real percentage is present we drive a
+            # precise bar; otherwise the animated marquee keeps running with a phase label.
+            last_pct = -1
+            try:
+                for raw in iter(proc.stdout.readline, ""):
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    m = re.search(r"(\d{1,3})\s*%", line)
+                    if m:
+                        pct = min(100, int(m.group(1)))
+                        if pct != last_pct:
+                            last_pct = pct
+                            self.after(0, lambda p=pct: self._progress_percent(p, f"Downloading MongoDB... {p}%"))
+                    else:
+                        phase = self._winget_phase(line)
+                        if phase:
+                            # Re-arm the marquee for non-percentage phases (e.g. installing).
+                            self.after(0, lambda ph=phase: (self._progress_show(ph)))
+            except Exception:
+                pass
+            proc.wait()
+
+            # MSI installs the service; make sure it's running.
+            self.after(0, lambda: self._progress_show("Starting the MongoDB service..."))
             try:
                 subprocess.run(["net", "start", "MongoDB"], creationflags=CREATE_NO_WINDOW, capture_output=True)
             except Exception:
                 pass
+
+            self.after(0, self._progress_hide)
             if self._mongo_running():
-                self.status.config(text="MongoDB installed and running - click Test Database.", fg=COLORS["ok"])
+                self.after(0, lambda: self.status.config(
+                    text="MongoDB installed and running - click Test Database.", fg=COLORS["ok"]))
             elif self._mongo_installed():
-                self.status.config(text="MongoDB installed. Start it via 'Setup Local DB', then Test.", fg=COLORS["muted"])
+                self.after(0, lambda: self.status.config(
+                    text="MongoDB installed. Start it via 'Setup Local DB', then Test.", fg=COLORS["muted"]))
             else:
-                self.status.config(text="Could not confirm the install - open the download page to install manually.",
-                                   fg=COLORS["bad"])
+                self.after(0, lambda: self.status.config(
+                    text="Could not confirm the install (winget exit " + str(proc.returncode) +
+                         "). Open the download page to install manually.", fg=COLORS["bad"]))
         threading.Thread(target=work, daemon=True).start()
 
     def _lan_ip(self):
@@ -409,8 +529,12 @@ class ControlPanel(tk.Tk):
         self.after(4000, self._poll_status)
 
     def _render_status(self, running, mongo):
+        # Don't clobber an in-progress long operation (e.g. MongoDB install).
+        if getattr(self, "_progress_active", False):
+            return
         cur = self.status.cget("text")
-        if cur.startswith("Testing") or cur.startswith("Server starting") or cur.startswith("Database:"):
+        if (cur.startswith("Testing") or cur.startswith("Server starting")
+                or cur.startswith("Database:") or cur.startswith("Installing MongoDB")):
             return
         if running:
             db = "DB connected" if mongo else ("DB OFFLINE" if mongo is False else "DB checking")

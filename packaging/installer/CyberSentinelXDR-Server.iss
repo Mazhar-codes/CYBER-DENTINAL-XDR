@@ -151,4 +151,8 @@ Name: "{commondesktop}\Cyber Sentinel XDR Server"; Filename: "{app}\server\{#Con
 
 [Run]
 ; Open the Control Panel when setup finishes so the operator can configure + start.
-Filename: "{app}\server\{#ControlExe}"; Description: "Open the Server Control Panel"; Flags: postinstall nowait
+; ServerControl.exe is built with a requireAdministrator manifest (uac_admin), so it
+; must be launched via ShellExecute (shellexec) - a plain CreateProcess fails with
+; error 740 ("The requested operation requires elevation"). shellexec honours the
+; manifest and elevates cleanly.
+Filename: "{app}\server\{#ControlExe}"; Description: "Open the Server Control Panel"; Flags: postinstall nowait shellexec runasoriginaluser
