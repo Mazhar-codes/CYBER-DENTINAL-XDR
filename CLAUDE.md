@@ -542,7 +542,7 @@ These additions elevate Cyber Sentinel XDR from a detection engine to a complete
 | Endpoint Ingest Pipeline | 100% | 422 errors fixed; optional fields; list→dict coercion; `check_payload.py` diagnostic tool |
 | Backend Reliability | 100% | Monitoring gate fix; enriched audit logging; auto-response end-to-end; Ctrl+C shutdown clean; all 6 endpoint handlers hardened against MongoDB Atlas drops |
 | Attack Graph / Endpoint Grid | 100% | Flickering fixed (35s heartbeat + 40s frontend debounce); duplicate cards fixed; `/endpoint/list` response unwrapping fixed |
-| Contact Us Page | 100% | Real team photos (Annas/Malaika/Mazhar); clickable mailto: + tel: links; logo in sticky header |
+| Contact Us Page | 100% | Real team photos (Malaika/Mazhar); clickable mailto: + tel: links; logo in sticky header |
 | Brand / Logo | 100% | Logo placed in Sidebar, Login, About, Contact Us, PDF reports; public/logo.jpg + Backend/logo.jpg |
 
 ---

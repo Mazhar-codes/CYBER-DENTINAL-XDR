@@ -470,5 +470,5 @@ not this README.
 
 ## Team
 
-Built by Annas Habib, Malaika Khattak, and Syed Mazhar Hussain Shah. Contact details and
+Built by Malaika Khattak and Syed Mazhar Hussain Shah. Contact details and
 team photos are in the dashboard's Contact Us page (`ContactUsPage.tsx`).
