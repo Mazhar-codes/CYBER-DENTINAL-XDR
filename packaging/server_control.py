@@ -19,9 +19,12 @@ import os
 import re
 import sys
 import glob
+import json
+import time
 import shutil
 import socket
 import secrets
+import tempfile
 import subprocess
 import threading
 import webbrowser
@@ -29,6 +32,8 @@ import urllib.request
 
 import tkinter as tk
 from tkinter import messagebox, ttk
+
+MONGO_CURRENT_JSON = "https://downloads.mongodb.org/current.json"
 
 CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
@@ -229,9 +234,10 @@ class ControlPanel(tk.Tk):
             if "localhost" not in self.uri.get() and "127.0.0.1" not in self.uri.get():
                 self._atlas_cache = self.uri.get()
             self.uri.set(LOCAL_URI)
-            self.hint.config(text="Local mode: uses a MongoDB installed on THIS computer. If Test says "
-                                  "'no local MongoDB', install MongoDB Community (mongodb.com), start it, "
-                                  "then Test again. The 27 collections are created automatically on first start.")
+            self.hint.config(text="Local mode: uses a MongoDB installed on THIS computer. No account, username or "
+                                  "password is needed - local MongoDB has no login. Click 'Setup Local DB' to "
+                                  "download + install it automatically (shows a progress %). The 27 collections "
+                                  "are created automatically on first start.")
             self._local_status()
         else:
             if "localhost" in self.uri.get() or "127.0.0.1" in self.uri.get():
@@ -299,7 +305,7 @@ class ControlPanel(tk.Tk):
             "(needs internet + admin approval; takes a few minutes)\n\n"
             "Yes = auto-install    No = open the download page")
         if choice:
-            self._winget_install()
+            self._install_mongodb()
         else:
             webbrowser.open("https://www.mongodb.com/try/download/community")
             messagebox.showinfo("Manual install",
@@ -367,74 +373,182 @@ class ControlPanel(tk.Tk):
             return "Install finished - a restart may be required."
         return ""
 
-    def _winget_install(self):
-        self.after(0, lambda: self._progress_show("Preparing to install MongoDB Community via winget..."))
+    # ---- Direct MongoDB download+install with a REAL percentage bar ------------
+    def _fetch_mongo_msi_url(self):
+        """Resolve the latest production MongoDB Community Windows MSI URL + version."""
+        req = urllib.request.Request(MONGO_CURRENT_JSON, headers={"User-Agent": "CyberSentinelXDR"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+
+        def pick(versions, prod_only):
+            for v in versions:
+                if prod_only and not v.get("production_release", False):
+                    continue
+                for d in v.get("downloads", []):
+                    if ("windows" in str(d.get("target", "")).lower()
+                            and d.get("arch") == "x86_64" and d.get("edition") == "base"
+                            and d.get("msi")):
+                        return d["msi"], v.get("version")
+            return None, None
+
+        versions = data.get("versions", [])
+        url, ver = pick(versions, True)
+        if not url:
+            url, ver = pick(versions, False)
+        return url, ver
+
+    def _emit_dl_progress(self, done, total, elapsed):
+        mb = done / 1048576.0
+        speed = (done / elapsed / 1048576.0) if elapsed > 0 else 0.0
+        if total > 0:
+            pct = min(100, int(done * 100 / total))
+            tot_mb = total / 1048576.0
+            eta = ((total - done) / (done / elapsed)) if (done > 0 and elapsed > 0) else 0
+            txt = ("Downloading MongoDB  %d%%   %.0f / %.0f MB   %.1f MB/s   ETA %dm %02ds"
+                   % (pct, mb, tot_mb, speed, int(eta // 60), int(eta % 60)))
+            self.after(0, lambda p=pct, t=txt: self._progress_percent(p, t))
+        else:
+            txt = "Downloading MongoDB  %.0f MB   %.1f MB/s" % (mb, speed)
+            self.after(0, lambda t=txt: self._progress_show(t))
+
+    def _download_with_progress(self, url, dest):
+        req = urllib.request.Request(url, headers={"User-Agent": "CyberSentinelXDR"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            total = int(r.headers.get("Content-Length", 0) or 0)
+            done, start, last_ui = 0, time.time(), 0.0
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = r.read(262144)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    done += len(chunk)
+                    now = time.time()
+                    if now - last_ui >= 0.4:
+                        last_ui = now
+                        self._emit_dl_progress(done, total, now - start)
+            self._emit_dl_progress(done, total, max(0.001, time.time() - start))
+        return (total == 0) or (done >= total)
+
+    def _install_mongodb(self):
+        """Primary path: download the official MSI (with a % bar) and install it as
+        a Windows service. Falls back to winget, then to the download page."""
+        self.after(0, lambda: self._progress_show("Locating the latest MongoDB Community installer..."))
         self.after(0, lambda: self.status.config(
-            text="Installing MongoDB - keep this window open, it can take several minutes.",
+            text="Installing MongoDB (large download, ~800 MB). Keep this window open - the % and ETA below "
+                 "update live; total time depends on your internet speed.",
             fg=COLORS["accent"]))
 
         def work():
+            url, ver = None, None
             try:
-                proc = subprocess.Popen(
-                    ["winget", "install", "-e", "--id", "MongoDB.Server",
-                     "--accept-package-agreements", "--accept-source-agreements",
-                     "--disable-interactivity"],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace",
-                    bufsize=1, creationflags=CREATE_NO_WINDOW)
-            except FileNotFoundError:
-                self.after(0, self._progress_hide)
-                self.after(0, lambda: self.status.config(
-                    text="winget not available - opening the MongoDB download page...", fg=COLORS["bad"]))
-                webbrowser.open("https://www.mongodb.com/try/download/community")
-                return
-            except Exception as e:
-                self.after(0, self._progress_hide)
-                self.after(0, lambda: self.status.config(text="Install error: " + str(e)[:80], fg=COLORS["bad"]))
-                return
+                url, ver = self._fetch_mongo_msi_url()
+            except Exception:
+                url = None
 
-            # Stream winget output live. When a real percentage is present we drive a
-            # precise bar; otherwise the animated marquee keeps running with a phase label.
-            last_pct = -1
-            try:
-                for raw in iter(proc.stdout.readline, ""):
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    m = re.search(r"(\d{1,3})\s*%", line)
-                    if m:
-                        pct = min(100, int(m.group(1)))
-                        if pct != last_pct:
-                            last_pct = pct
-                            self.after(0, lambda p=pct: self._progress_percent(p, f"Downloading MongoDB... {p}%"))
+            if url:
+                msi = os.path.join(tempfile.gettempdir(), "cyber_sentinel_mongodb.msi")
+                try:
+                    self.after(0, lambda v=ver: self._progress_show(
+                        "Downloading MongoDB %s ..." % (v or "Community")))
+                    ok = self._download_with_progress(url, msi)
+                    if ok and os.path.exists(msi) and os.path.getsize(msi) > 50 * 1024 * 1024:
+                        self.after(0, lambda: self._progress_show(
+                            "Installing MongoDB as a Windows service (about a minute)..."))
+                        # Documented MongoDB unattended install: server + service, no Compass.
+                        subprocess.run(
+                            ["msiexec", "/i", msi, "/qn", "/norestart",
+                             'ADDLOCAL=ServerService,Client', 'SHOULD_INSTALL_COMPASS=0'],
+                            creationflags=CREATE_NO_WINDOW)
+                        self._finish_mongo_install()
+                        return
                     else:
-                        phase = self._winget_phase(line)
-                        if phase:
-                            # Re-arm the marquee for non-percentage phases (e.g. installing).
-                            self.after(0, lambda ph=phase: (self._progress_show(ph)))
-            except Exception:
-                pass
-            proc.wait()
+                        self.after(0, lambda: self._progress_show(
+                            "Direct download incomplete - trying winget instead..."))
+                except Exception:
+                    self.after(0, lambda: self._progress_show(
+                        "Direct download failed - trying winget instead..."))
+                finally:
+                    try:
+                        os.remove(msi)
+                    except Exception:
+                        pass
 
-            # MSI installs the service; make sure it's running.
-            self.after(0, lambda: self._progress_show("Starting the MongoDB service..."))
-            try:
-                subprocess.run(["net", "start", "MongoDB"], creationflags=CREATE_NO_WINDOW, capture_output=True)
-            except Exception:
-                pass
+            # Fallback path (no percentage, but works if the direct download is blocked).
+            self._winget_install_fallback()
 
-            self.after(0, self._progress_hide)
-            if self._mongo_running():
-                self.after(0, lambda: self.status.config(
-                    text="MongoDB installed and running - click Test Database.", fg=COLORS["ok"]))
-            elif self._mongo_installed():
-                self.after(0, lambda: self.status.config(
-                    text="MongoDB installed. Start it via 'Setup Local DB', then Test.", fg=COLORS["muted"]))
-            else:
-                self.after(0, lambda: self.status.config(
-                    text="Could not confirm the install (winget exit " + str(proc.returncode) +
-                         "). Open the download page to install manually.", fg=COLORS["bad"]))
         threading.Thread(target=work, daemon=True).start()
+
+    def _finish_mongo_install(self):
+        try:
+            subprocess.run(["net", "start", "MongoDB"], creationflags=CREATE_NO_WINDOW, capture_output=True)
+        except Exception:
+            pass
+        self.after(0, self._progress_hide)
+        if self._mongo_running():
+            self.after(0, self._auto_config_local_after_install)
+        elif self._mongo_installed():
+            self.after(0, lambda: self.status.config(
+                text="MongoDB installed. Click 'Setup Local DB' once more to start the service.",
+                fg=COLORS["muted"]))
+        else:
+            self.after(0, lambda: self.status.config(
+                text="Install could not be confirmed - see mongodb.com/try/download/community to install manually.",
+                fg=COLORS["bad"]))
+
+    def _auto_config_local_after_install(self):
+        """MongoDB is up: switch to Local, save .env, and tell the user no account is needed."""
+        self.db_type.set("local")
+        self.uri.set(LOCAL_URI)
+        saved_ok = True
+        try:
+            write_env({"MONGO_URI": LOCAL_URI, "BACKEND_HOST": "0.0.0.0",
+                       "BACKEND_PORT": self._port_val()})
+        except Exception:
+            saved_ok = False
+        self.status.config(text="Local MongoDB is installed, running, and configured. Click 'Start Server'.",
+                           fg=COLORS["ok"])
+        msg = ("MongoDB is installed and running on this computer.\n\n"
+               "No account, username, or password is needed - local MongoDB has no login. "
+               "Cyber Sentinel XDR creates all of its collections automatically the first time "
+               "the server starts.\n\n")
+        msg += ("I've set the database to 'Local MongoDB' and saved the configuration for you.\n\n"
+                if saved_ok else
+                "Set Database to 'Local MongoDB' and click 'Save Config'.\n\n")
+        msg += "Next step: click 'Start Server', then 'Open Dashboard'."
+        messagebox.showinfo("MongoDB ready", msg)
+        self._local_status()
+
+    def _winget_install_fallback(self):
+        """Secondary installer via winget (streamed; no reliable percentage)."""
+        self.after(0, lambda: self._progress_show("Installing MongoDB via winget (fallback)..."))
+        try:
+            proc = subprocess.Popen(
+                ["winget", "install", "-e", "--id", "MongoDB.Server",
+                 "--accept-package-agreements", "--accept-source-agreements",
+                 "--disable-interactivity"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace",
+                bufsize=1, creationflags=CREATE_NO_WINDOW)
+        except FileNotFoundError:
+            self.after(0, self._progress_hide)
+            self.after(0, lambda: self.status.config(
+                text="Could not auto-install - opening the MongoDB download page...", fg=COLORS["bad"]))
+            webbrowser.open("https://www.mongodb.com/try/download/community")
+            return
+        except Exception as e:
+            self.after(0, self._progress_hide)
+            self.after(0, lambda: self.status.config(text="Install error: " + str(e)[:80], fg=COLORS["bad"]))
+            return
+        try:
+            for raw in iter(proc.stdout.readline, ""):
+                phase = self._winget_phase(raw.strip())
+                if phase:
+                    self.after(0, lambda ph=phase: self._progress_show(ph))
+        except Exception:
+            pass
+        proc.wait()
+        self._finish_mongo_install()
 
     def _lan_ip(self):
         try:
