@@ -24,7 +24,7 @@ a = Analysis(
     datas=[],
     hiddenimports=[
         # agent.py imports these flat (after sys.path.insert of the agent dir)
-        "identity", "sender", "honeypot", "command_listener",
+        "identity", "sender", "honeypot", "command_listener", "xdr_license",
         "collectors",
         "collectors.network_collector",
         "collectors.system_collector",

@@ -33,6 +33,15 @@ import urllib.request
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+# Licensing / activation core (frozen into ServerControl.exe alongside this file).
+try:
+    import xdr_license
+    _LICENSING = True
+except Exception:  # pragma: no cover - only if the module is missing in dev
+    _LICENSING = False
+
+_PRODUCT = "server"
+
 MONGO_CURRENT_JSON = "https://downloads.mongodb.org/current.json"
 
 CREATE_NO_WINDOW = 0x08000000
@@ -125,14 +134,123 @@ class ControlPanel(tk.Tk):
         self.api = tk.StringVar(value=values.get("XDR_API_KEY", ""))
         self.jwt = tk.StringVar(value=values.get("JWT_SECRET_KEY", ""))
         self.port = tk.StringVar(value=values.get("BACKEND_PORT", "8000"))
+
+        # --- Licensing gate -------------------------------------------------
+        # The Control Panel is the launcher for the whole server. If this
+        # machine is not activated (or the trial has expired) we show a locked
+        # Activation screen instead of the dashboard controls, and nothing can
+        # be started until a valid, unused activation code is entered.
+        self._license_status = None
+        if not self._enforce_license():
+            return
+
         self._build_ui()
         self._poll_status()
+
+    # ------------------------------------------------------------------
+    # Licensing
+    # ------------------------------------------------------------------
+    def _enforce_license(self):
+        """Return True if licensed (build the dashboard); otherwise show the
+        Activation screen and return False."""
+        if not _LICENSING:
+            return True
+        st = xdr_license.check_license(_PRODUCT)
+        self._license_status = st
+        if st["status"] == "ACTIVE":
+            return True
+        self._build_activation_ui(st)
+        return False
+
+    def _build_activation_ui(self, st):
+        for w in self.winfo_children():
+            w.destroy()
+        self.title("Cyber Sentinel XDR - Activation")
+
+        tk.Label(self, text="CYBER SENTINEL XDR", bg=COLORS["bg"], fg=COLORS["accent"],
+                 font=("Consolas", 18, "bold")).pack(pady=(28, 0))
+        tk.Label(self, text="Server - Product Activation", bg=COLORS["bg"], fg=COLORS["muted"],
+                 font=("Consolas", 10)).pack(pady=(0, 16))
+
+        locked = tk.Frame(self, bg=COLORS["panel"])
+        locked.pack(fill="x", padx=36, pady=(0, 8))
+        status = st.get("status")
+        if status == "EXPIRED":
+            head, col = "TRIAL EXPIRED", COLORS["bad"]
+            sub = ("Your trial period has ended. Enter a NEW activation code to "
+                   "continue. A previously used code will not work again.")
+        elif status == "TAMPERED":
+            head, col = "LICENSE LOCKED", COLORS["bad"]
+            sub = st.get("message", "Please enter a new activation code.")
+        else:
+            head, col = "ACTIVATION REQUIRED", COLORS["accent"]
+            sub = ("This copy of Cyber Sentinel XDR Server is not activated. "
+                   "Enter the activation code you were given to unlock it.")
+        tk.Label(locked, text=head, bg=COLORS["panel"], fg=col,
+                 font=("Consolas", 13, "bold")).pack(pady=(12, 4))
+        tk.Label(locked, text=sub, bg=COLORS["panel"], fg=COLORS["fg"], wraplength=560,
+                 justify="center", font=("Consolas", 9)).pack(padx=16, pady=(0, 12))
+
+        tk.Label(self, text="Activation code", bg=COLORS["bg"], fg=COLORS["fg"],
+                 font=("Consolas", 10)).pack(pady=(12, 2))
+        self._code_var = tk.StringVar()
+        entry = tk.Entry(self, textvariable=self._code_var, justify="center",
+                         bg=COLORS["entry"], fg=COLORS["fg"], insertbackground=COLORS["accent"],
+                         relief="flat", font=("Consolas", 13), width=42)
+        entry.pack(pady=(0, 4), ipady=6)
+        entry.focus_set()
+        entry.bind("<Return>", lambda _e: self._do_activate())
+
+        tk.Label(self, text="Example:  CSXS-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXX",
+                 bg=COLORS["bg"], fg=COLORS["hint"], font=("Consolas", 8)).pack(pady=(0, 10))
+
+        self._act_status = tk.Label(self, text="", bg=COLORS["bg"], fg=COLORS["bad"],
+                                    wraplength=560, justify="center", font=("Consolas", 9))
+        self._act_status.pack(pady=(0, 8))
+
+        btnrow = tk.Frame(self, bg=COLORS["bg"])
+        btnrow.pack(pady=(4, 0))
+        tk.Button(btnrow, text="Activate", command=self._do_activate, bg=COLORS["panel"],
+                  fg=COLORS["ok"], activebackground=COLORS["ok"], activeforeground=COLORS["bg"],
+                  relief="flat", font=("Consolas", 11, "bold"), width=16, height=2,
+                  cursor="hand2").pack(side="left", padx=6)
+        tk.Button(btnrow, text="Quit", command=self.destroy, bg=COLORS["panel"],
+                  fg=COLORS["bad"], relief="flat", font=("Consolas", 11, "bold"),
+                  width=10, height=2, cursor="hand2").pack(side="left", padx=6)
+
+    def _do_activate(self):
+        code = self._code_var.get().strip()
+        if not code:
+            self._act_status.config(text="Please enter your activation code.", fg=COLORS["bad"])
+            return
+        res = xdr_license.activate(code, _PRODUCT)
+        if res["ok"]:
+            for w in self.winfo_children():
+                w.destroy()
+            self.title("Cyber Sentinel XDR - Server Control Panel")
+            self._license_status = xdr_license.check_license(_PRODUCT)
+            self._build_ui()
+            self._poll_status()
+        else:
+            self._act_status.config(text=res["message"], fg=COLORS["bad"])
 
     def _build_ui(self):
         tk.Label(self, text="CYBER SENTINEL XDR", bg=COLORS["bg"], fg=COLORS["accent"],
                  font=("Consolas", 18, "bold")).pack(pady=(16, 0))
         tk.Label(self, text="Server Control Panel", bg=COLORS["bg"], fg=COLORS["muted"],
-                 font=("Consolas", 10)).pack(pady=(0, 8))
+                 font=("Consolas", 10)).pack(pady=(0, 4))
+
+        # License banner (trial countdown / licensed)
+        st = self._license_status or {}
+        if st.get("kind") == "universal":
+            lic_txt, lic_col = "Licensed", COLORS["ok"]
+        elif st.get("remaining") is not None:
+            lic_txt = f"Trial license - {xdr_license.format_remaining(st['remaining'])} remaining"
+            lic_col = COLORS["ok"] if st["remaining"] > 86400 else COLORS["accent"]
+        else:
+            lic_txt, lic_col = "Licensed", COLORS["ok"]
+        tk.Label(self, text=lic_txt, bg=COLORS["bg"], fg=lic_col,
+                 font=("Consolas", 8, "bold")).pack(pady=(0, 8))
 
         # --- Endpoint URL (what to paste into endpoint agents) ---
         self._ip = self._lan_ip()
@@ -658,5 +776,30 @@ class ControlPanel(tk.Tk):
             self.status.config(text="Server: STOPPED", fg=COLORS["muted"])
 
 
+def _headless_cli(argv) -> int:
+    """Installer-facing license CLI (no GUI). Returns a process exit code.
+        ServerControl.exe --activate <CODE>   -> validate + persist, 0 on success
+        ServerControl.exe --license-status    -> 0 if activated, 1 otherwise
+    """
+    if not _LICENSING:
+        print("Licensing module unavailable.")
+        return 1
+    cmd = argv[0]
+    if cmd == "--activate":
+        code = argv[1] if len(argv) > 1 else ""
+        res = xdr_license.activate(code, _PRODUCT)
+        print(("OK: " if res["ok"] else "FAIL: ") + res["message"])
+        return 0 if res["ok"] else 1
+    if cmd == "--license-status":
+        st = xdr_license.check_license(_PRODUCT)
+        print(f"{st['status']}: {st['message']}")
+        return 0 if st["status"] == "ACTIVE" else 1
+    print("Unknown option.")
+    return 2
+
+
 if __name__ == "__main__":
+    _argv = sys.argv[1:]
+    if _argv and _argv[0] in ("--activate", "--license-status"):
+        sys.exit(_headless_cli(_argv))
     ControlPanel().mainloop()

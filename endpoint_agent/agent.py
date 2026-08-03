@@ -61,6 +61,13 @@ from collectors import (                                          # noqa: E402
     collect_user,
 )
 
+# Licensing / activation core (frozen into CyberSentinelAgent.exe).
+try:
+    import xdr_license                                            # noqa: E402
+    _LICENSING = True
+except Exception:  # pragma: no cover - only if module missing in dev
+    _LICENSING = False
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -220,6 +227,15 @@ def _parse_args() -> argparse.Namespace:
         default=float(os.environ.get("XDR_COMMAND_INTERVAL", _DEFAULTS["command_interval"])),
         metavar="SECONDS",
         help="How often to poll for pending SOAR commands",
+    )
+    p.add_argument(
+        "--activate",
+        metavar="CODE",
+        default=None,
+        help=(
+            "Validate + persist an ENDPOINT activation code, then exit "
+            "(used by the installer). Exit code 0 = success."
+        ),
     )
     p.add_argument(
         "--simulate",
@@ -482,6 +498,33 @@ async def _main() -> None:
     global _health_identity
 
     args = _parse_args()
+
+    # --- Licensing -------------------------------------------------------
+    # `--activate CODE`: used by the installer (and manual re-activation).
+    # Validate, persist to ProgramData + registry, and exit.
+    if _LICENSING and args.activate:
+        res = xdr_license.activate(args.activate, "endpoint")
+        print(("OK: " if res["ok"] else "FAIL: ") + res["message"])
+        sys.exit(0 if res["ok"] else 1)
+
+    # Every normal startup is gated: if this endpoint is not activated, or the
+    # trial has expired, the agent refuses to run (no telemetry, no SOAR) until
+    # a NEW valid activation code is supplied.
+    if _LICENSING:
+        st = xdr_license.check_license("endpoint")
+        if st["status"] != "ACTIVE":
+            log.error("=" * 68)
+            log.error("LICENSE LOCKED - %s", st["message"])
+            log.error("This endpoint agent is not activated and will not run.")
+            log.error("Activate with:  CyberSentinelAgent.exe --activate <CODE>")
+            log.error("=" * 68)
+            sys.exit(3)
+        remaining = st.get("remaining")
+        if remaining is None:
+            log.info("License: OK (universal).")
+        else:
+            log.info("License: OK - %s remaining.", xdr_license.format_remaining(remaining))
+
     identity = get_identity()
 
     # Expose identity to the health handler before starting the server thread

@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define MyAppName    "Cyber Sentinel XDR Server"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyPublisher  "Cyber Sentinel XDR"
 #define BackendExe   "backend.exe"
 #define ControlExe   "ServerControl.exe"
@@ -64,6 +64,27 @@ Type: files; Name: "{app}\server\.env"
 [Code]
 var
   ApiKey, JwtSecret: String;
+  ActPage: TInputQueryWizardPage;
+
+{ Lightweight format check (no crypto) so obvious typos are caught before the
+  ~1 GB copy. Full cryptographic validation happens post-install via
+  ServerControl.exe --activate. Server codes start with CSXS. }
+function IsValidCodeFormat(s, prefix: String): Boolean;
+var i: Integer; ch: Char;
+begin
+  Result := False;
+  s := Uppercase(Trim(s));
+  StringChangeEx(s, '-', '', True);
+  StringChangeEx(s, ' ', '', True);
+  if Copy(s, 1, 4) <> prefix then Exit;
+  if Length(s) < 20 then Exit;
+  for i := 1 to Length(s) do
+  begin
+    ch := s[i];
+    if not ((((ch >= 'A') and (ch <= 'Z'))) or ((ch >= '2') and (ch <= '7'))) then Exit;
+  end;
+  Result := True;
+end;
 
 { Generate a strong random hex token (64 chars) via PowerShell crypto (two GUIDs).
   Falls back to a tick-based value so the .env always has a usable, non-default
@@ -86,6 +107,30 @@ procedure InitializeWizard;
 begin
   ApiKey := GenToken;      { strong default; editable later in the Control Panel }
   JwtSecret := GenToken;   { internal session-signing secret; never shown }
+
+  { Activation page, shown right after the EULA. }
+  ActPage := CreateInputQueryPage(wpLicense,
+    'Product Activation',
+    'Enter your Cyber Sentinel XDR Server activation code',
+    'You were given an activation code that begins with CSXS-. Enter it below to '
+    + 'activate this server. A trial code works once per computer; when a trial '
+    + 'ends you will need a new code to continue.');
+  ActPage.Add('Activation code:', False);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (ActPage <> nil) and (CurPageID = ActPage.ID) then
+  begin
+    if not IsValidCodeFormat(ActPage.Values[0], 'CSXS') then
+    begin
+      MsgBox('Please enter a valid Server activation code.'#13#10 +
+             'A Server code starts with CSXS- (Endpoint codes will not work here).',
+             mbError, MB_OK);
+      Result := False;
+    end;
+  end;
 end;
 
 { Stop a previous server/control panel (upgrade) so exes are not locked. }
@@ -123,7 +168,18 @@ begin
          'advfirewall firewall add rule name="CyberSentinelXDR Server 8000" dir=in action=allow protocol=TCP localport=8000',
          '', SW_HIDE, ewWaitUntilTerminated, rc);
 
-    { 4. The server is started from the Control Panel, not a boot task. }
+    { 4. Activate the product with the code entered in the wizard. The frozen
+         Control Panel performs the real cryptographic check and writes the
+         license to C:\ProgramData\CyberSentinel + HKLM (survives reinstall). }
+    Exec(ExpandConstant('{app}\server\{#ControlExe}'),
+         '--activate "' + Trim(ActPage.Values[0]) + '"', '',
+         SW_HIDE, ewWaitUntilTerminated, rc);
+    if rc <> 0 then
+      MsgBox('The activation code could not be verified.'#13#10#13#10 +
+             'The Control Panel will open locked - enter a valid Server code there to unlock it.',
+             mbInformation, MB_OK);
+
+    { 5. The server is started from the Control Panel, not a boot task. }
     MsgBox('Cyber Sentinel XDR Server installed.'#13#10#13#10 +
            'The Server Control Panel will open now. Use it to:'#13#10 +
            '  - set your MongoDB URI (local or Atlas)'#13#10 +

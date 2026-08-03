@@ -19,7 +19,7 @@
 ; ============================================================================
 
 #define MyAppName    "Cyber Sentinel XDR"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyPublisher  "Cyber Sentinel XDR"
 #define AgentExe     "CyberSentinelAgent.exe"
 #define TaskName     "CyberSentinelXDR Endpoint Agent"
@@ -85,6 +85,25 @@ begin
   Result := (RolePage <> nil) and (RolePage.SelectedValueIndex = 0);
 end;
 
+{ Lightweight format check (no crypto). Full validation is done post-install by
+  CyberSentinelAgent.exe --activate. Endpoint codes start with CSXE. }
+function IsValidCodeFormat(s, prefix: String): Boolean;
+var i: Integer; ch: Char;
+begin
+  Result := False;
+  s := Uppercase(Trim(s));
+  StringChangeEx(s, '-', '', True);
+  StringChangeEx(s, ' ', '', True);
+  if Copy(s, 1, 4) <> prefix then Exit;
+  if Length(s) < 20 then Exit;
+  for i := 1 to Length(s) do
+  begin
+    ch := s[i];
+    if not ((((ch >= 'A') and (ch <= 'Z'))) or ((ch >= '2') and (ch <= '7'))) then Exit;
+  end;
+  Result := True;
+end;
+
 procedure InitializeWizard;
 begin
   { Role selection — exclusive radio options, shown right after the EULA. }
@@ -105,8 +124,10 @@ begin
     'The agent sends telemetry to this server and receives response commands from it.');
   EndpointPage.Add('Backend server URL (e.g. http://192.168.1.5:8001):', False);
   EndpointPage.Add('API key (must match XDR_API_KEY in the server''s .env):', False);
+  EndpointPage.Add('Activation code (starts with CSXE-):', False);
   EndpointPage.Values[0] := 'http://192.168.1.5:8001';
   EndpointPage.Values[1] := '';
+  EndpointPage.Values[2] := '';
 end;
 
 { Skip the endpoint-config page when the Server role is selected. }
@@ -137,6 +158,13 @@ begin
     begin
       MsgBox('Please enter the backend server URL (e.g. http://192.168.1.5:8001).', mbError, MB_OK);
       Result := False;
+    end
+    else if not IsValidCodeFormat(EndpointPage.Values[2], 'CSXE') then
+    begin
+      MsgBox('Please enter a valid Endpoint activation code.'#13#10 +
+             'An Endpoint code starts with CSXE- (Server codes will not work here).',
+             mbError, MB_OK);
+      Result := False;
     end;
   end;
 end;
@@ -161,6 +189,18 @@ begin
     Exe := ExpandConstant('{app}\{#AgentExe}');
     Url := Trim(EndpointPage.Values[0]);
     Key := Trim(EndpointPage.Values[1]);
+
+    { Activate this endpoint. The agent verifies the code cryptographically and
+      writes the license to C:\ProgramData\CyberSentinel + HKLM so it survives
+      uninstall/reinstall (a used trial code cannot be reused on this machine). }
+    Exec(Exe, '--activate "' + Trim(EndpointPage.Values[2]) + '"', '',
+         SW_HIDE, ewWaitUntilTerminated, rc);
+    if rc <> 0 then
+      MsgBox('The activation code could not be verified.'#13#10#13#10 +
+             'The agent is installed but will stay LOCKED (no telemetry / no response) '
+             + 'until activated. To activate later, open an Administrator command prompt and run:'#13#10#13#10 +
+             '    "' + Exe + '" --activate <YOUR-CODE>',
+             mbInformation, MB_OK);
 
     { Write a tiny launcher .cmd so the scheduled task avoids nested-quote issues.
       The API key lives in this file inside Program Files (admin-only writable). }
