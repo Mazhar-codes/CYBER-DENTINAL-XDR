@@ -59,6 +59,15 @@ SURICATA_DOWNLOAD_URL = "https://suricata.io/download/"
 NPCAP_VERSION = "1.87"
 NPCAP_DOWNLOAD_URL = "https://npcap.com/#download"
 
+# Suricata itself IS bundled + silently installed by the Server installer (GPLv2,
+# no redistribution restriction) - see CurStepChanged in CyberSentinelXDR-Server.iss.
+# It always lands at this default path; there's no custom-path option in the MSI.
+SURICATA_INSTALL_DIR = r"C:\Program Files\Suricata"
+SURICATA_EXE = os.path.join(SURICATA_INSTALL_DIR, "suricata.exe")
+SURICATA_YAML = os.path.join(SURICATA_INSTALL_DIR, "suricata.yaml")
+# Matches Backend/config.py's suricata_eve_path default (SURICATA_EVE_PATH env var).
+SURICATA_LOG_DIR = r"C:\SuricataLogs"
+
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
@@ -126,6 +135,105 @@ def friendly_error(err, uri):
     if "ssl" in e or "tls" in e:
         return "TLS/SSL handshake failed - unstable network, or a firewall is blocking the DB port."
     return err[:110]
+
+
+# ---- Suricata / Npcap: detection, interface auto-pick, start/stop -----------
+# Module-level (not methods) so they have no Tk/self dependency and can be
+# exercised directly (e.g. in a REPL) without spinning up the GUI.
+
+def suricata_installed():
+    return os.path.exists(SURICATA_EXE)
+
+
+def suricata_running():
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq suricata.exe"],
+                             creationflags=CREATE_NO_WINDOW, capture_output=True, text=True)
+        return "suricata.exe" in (out.stdout or "")
+    except Exception:
+        return False
+
+
+def npcap_installed():
+    try:
+        out = subprocess.run(["sc", "query", "npcap"], creationflags=CREATE_NO_WINDOW,
+                             capture_output=True, text=True)
+        return "STATE" in (out.stdout or "")
+    except Exception:
+        return False
+
+
+def npcap_running():
+    try:
+        out = subprocess.run(["sc", "query", "npcap"], creationflags=CREATE_NO_WINDOW,
+                             capture_output=True, text=True)
+        return "RUNNING" in (out.stdout or "")
+    except Exception:
+        return False
+
+
+def list_capture_interfaces():
+    """Return [{"name", "guid", "is_default"}] for currently 'Up' adapters.
+
+    is_default marks the adapter that owns the machine's default route (0.0.0.0/0)
+    - the best guess for "the internet-facing NIC" on a typical single-NIC box.
+    Best-effort: on multi-NIC / VPN / VM hosts this guess can be wrong, which is
+    why the Control Panel always shows this as an editable dropdown, never a
+    silent, unconfirmed choice.
+    """
+    ps = (
+        "$def = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue "
+        "| Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty ifIndex); "
+        "Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { "
+        "[PSCustomObject]@{name=$_.Name; guid=$_.InterfaceGuid; is_default=([bool]($_.ifIndex -eq $def))} "
+        "} | ConvertTo-Json -Compress"
+    )
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                             creationflags=CREATE_NO_WINDOW, capture_output=True, text=True, timeout=15)
+        data = json.loads((out.stdout or "").strip() or "[]")
+    except Exception:
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    return data or []
+
+
+def _npf_device(guid):
+    guid = guid.strip()
+    return guid if guid.upper().startswith("\\DEVICE\\NPF_") else f"\\Device\\NPF_{guid}"
+
+
+def start_suricata(interface_guid):
+    """Launch suricata.exe pointed at interface_guid, writing eve.json to
+    SURICATA_LOG_DIR. Returns (ok, message)."""
+    if not suricata_installed():
+        return False, f"Suricata is not installed at {SURICATA_INSTALL_DIR}."
+    if not interface_guid:
+        return False, "No capture interface selected."
+    try:
+        os.makedirs(SURICATA_LOG_DIR, exist_ok=True)
+        # CREATE_NO_WINDOW alone (no DETACHED_PROCESS) + explicit DEVNULL stdio:
+        # combining DETACHED_PROCESS with inherited-but-nonexistent console stdio
+        # crashes suricata.exe immediately on startup (it writes startup banners
+        # to stdout by default) - it silently dies before opening eve.json.
+        subprocess.Popen(
+            [SURICATA_EXE, "-c", SURICATA_YAML, "-i", _npf_device(interface_guid), "-l", SURICATA_LOG_DIR],
+            cwd=SURICATA_INSTALL_DIR, creationflags=CREATE_NO_WINDOW,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            close_fds=True)
+        return True, "Suricata starting..."
+    except Exception as e:
+        return False, str(e)
+
+
+def stop_suricata():
+    try:
+        subprocess.run(["taskkill", "/IM", "suricata.exe", "/F"],
+                       creationflags=CREATE_NO_WINDOW, capture_output=True)
+        return True
+    except Exception:
+        return False
 
 
 class ControlPanel(tk.Tk):
@@ -355,13 +463,31 @@ class ControlPanel(tk.Tk):
                              "dashboard, malware, system or user-behavior detection to work.",
                  bg=COLORS["bg"], fg=COLORS["hint"], font=("Consolas", 8),
                  wraplength=620, justify="center").pack(pady=(0, 4))
+
+        self.net_status = tk.Label(self, text="Checking Suricata / Npcap...", bg=COLORS["bg"],
+                                   fg=COLORS["muted"], font=("Consolas", 8, "bold"))
+        self.net_status.pack(pady=(0, 4))
+
+        ifrow = tk.Frame(self, bg=COLORS["bg"]); ifrow.pack(pady=2)
+        tk.Label(ifrow, text="Capture interface:", bg=COLORS["bg"], fg=COLORS["fg"],
+                 font=("Consolas", 9)).pack(side="left", padx=(0, 6))
+        self.iface_var = tk.StringVar(value="Detecting...")
+        self.iface_combo = ttk.Combobox(ifrow, textvariable=self.iface_var, state="readonly", width=42)
+        self.iface_combo.pack(side="left")
+        self._iface_map = {}  # display name -> adapter GUID
+
         row3 = tk.Frame(self, bg=COLORS["bg"]); row3.pack(pady=4)
         self._btn(row3, f"Install Suricata {SURICATA_VERSION}", self._open_suricata_download, COLORS["accent"])
         self._btn(row3, f"Install Npcap {NPCAP_VERSION}", self._open_npcap_download, COLORS["accent"])
+        row4 = tk.Frame(self, bg=COLORS["bg"]); row4.pack(pady=4)
+        self._btn(row4, "Start Suricata", self._start_suricata, COLORS["ok"])
+        self._btn(row4, "Stop Suricata", self._stop_suricata, COLORS["bad"])
 
         tk.Label(self, text=f"Config file: {ENV_PATH}", bg=COLORS["bg"], fg=COLORS["muted"],
                  font=("Consolas", 8)).pack(side="bottom", pady=8)
         self._on_db_type()
+        self._refresh_network_status()
+        self._refresh_interfaces()
 
     # ---- Network detection prerequisites ------------------------------------
     def _open_suricata_download(self):
@@ -369,6 +495,53 @@ class ControlPanel(tk.Tk):
 
     def _open_npcap_download(self):
         webbrowser.open(NPCAP_DOWNLOAD_URL)
+
+    def _refresh_network_status(self):
+        def work():
+            s_ok, n_ok = suricata_installed(), npcap_running()
+            if s_ok and n_ok:
+                run = suricata_running()
+                text = "Suricata: RUNNING" if run else "Suricata + Npcap ready - click Start Suricata"
+                col = COLORS["ok"] if run else COLORS["accent"]
+            elif s_ok and not n_ok:
+                text, col = "Suricata installed, but Npcap driver is missing/stopped - click Install Npcap", COLORS["bad"]
+            elif not s_ok:
+                text, col = f"Suricata not installed - click 'Install Suricata {SURICATA_VERSION}'", COLORS["bad"]
+            else:
+                text, col = "Network detection not ready", COLORS["bad"]
+            self.net_status.config(text=text, fg=col)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _refresh_interfaces(self):
+        def work():
+            ifaces = list_capture_interfaces()
+            self._iface_map = {i["name"]: i["guid"] for i in ifaces}
+            names = list(self._iface_map.keys())
+            self.iface_combo["values"] = names
+            if not names:
+                self.iface_var.set("No active network adapter found")
+                return
+            default = next((i["name"] for i in ifaces if i.get("is_default")), names[0])
+            self.iface_var.set(default)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _start_suricata(self):
+        guid = self._iface_map.get(self.iface_var.get())
+        if not guid:
+            messagebox.showerror("No interface", "Select a capture interface first (click Install "
+                                  "Npcap/Suricata if the dropdown is empty, then reopen this panel).")
+            return
+        ok, msg = start_suricata(guid)
+        if ok:
+            self.net_status.config(text=f"Suricata starting on {self.iface_var.get()}...", fg=COLORS["accent"])
+            self.after(3000, self._refresh_network_status)
+        else:
+            messagebox.showerror("Start failed", msg)
+
+    def _stop_suricata(self):
+        stop_suricata()
+        self.net_status.config(text="Suricata stopped.", fg=COLORS["muted"])
+        self.after(1000, self._refresh_network_status)
 
     def _btn(self, parent, text, cmd, color):
         tk.Button(parent, text=text, command=cmd, bg=COLORS["panel"], fg=color,

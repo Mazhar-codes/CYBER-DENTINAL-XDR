@@ -2,26 +2,35 @@
 ;  Cyber Sentinel XDR - SERVER Installer (Inno Setup 6)
 ;
 ;  Installs the central SOC server: the frozen backend.exe (with the dashboard
-;  bundled inside it, served same-origin), the VC++ runtime, a firewall rule,
-;  and a boot-time service. The endpoint agent has its own separate, lean
-;  installer (CyberSentinelXDR.iss) - this one is large (~1 GB, torch).
+;  bundled inside it, served same-origin), the VC++ runtime, Suricata (IDS
+;  engine), a firewall rule, and a boot-time service. The endpoint agent has
+;  its own separate, lean installer (CyberSentinelXDR.iss) - this one is large
+;  (~1 GB, torch).
 ;
 ;  PREREQUISITES before building:
 ;    1. Backend bundle built:  packaging\build_backend.ps1  ->  C:\csxb\dist\backend
 ;    2. Dashboard built:        npm run build  (bundled into backend.exe by the spec)
 ;    3. redist\vc_redist.x64.exe present (staged from the MS redistributable)
+;    4. redist\Suricata-7.0.15-1-64bit.msi present
 ;
 ;  BUILD:
 ;    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" CyberSentinelXDR-Server.iss
-;  Output: C:\csxb\installer_out\CyberSentinelXDR-Server-Setup-1.0.0.exe
+;  Output: C:\csxb\installer_out\CyberSentinelXDR-Server-Setup-1.0.2.exe
 ;
 ;  NOTE: MongoDB is NOT bundled. The config page asks for MONGO_URI - default is
 ;  a local MongoDB (mongodb://localhost:27017, requires MongoDB installed on this
 ;  host), or paste a MongoDB Atlas SRV string to use the cloud.
+;
+;  NOTE: Suricata (GPLv2, no redistribution restriction) IS bundled and silently
+;  installed below. Npcap - Suricata's packet-capture driver - is deliberately
+;  NOT bundled: the free Npcap license disallows both silent install and
+;  redistribution inside another product (that requires a paid Npcap OEM
+;  license). ServerControl.exe instead links out to the official npcap.com
+;  installer and auto-detects the capture interface once it's present.
 ; ============================================================================
 
 #define MyAppName    "Cyber Sentinel XDR Server"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyPublisher  "Cyber Sentinel XDR"
 #define BackendExe   "backend.exe"
 #define ControlExe   "ServerControl.exe"
@@ -56,6 +65,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "{#ServerBundle}\*"; DestDir: "{app}\server"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; VC++ runtime (lightgbm + torch need it); removed after install.
 Source: "redist\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
+; Suricata IDS engine (network detection); removed after install.
+Source: "redist\Suricata-7.0.15-1-64bit.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall
 Source: "EULA.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [UninstallDelete]
@@ -152,6 +163,17 @@ begin
     { 1. Install the VC++ runtime (silent). Required by lightgbm + torch. }
     Exec(ExpandConstant('{tmp}\vc_redist.x64.exe'), '/install /quiet /norestart', '',
          SW_SHOW, ewWaitUntilTerminated, rc);
+
+    { 1b. Install Suricata (IDS engine, network detection) silently to its
+      default path (C:\Program Files\Suricata). GPLv2 - no redistribution
+      restriction, unlike Npcap (see the note at the top of this file), which
+      is why only Suricata gets this treatment; Npcap stays a manual step via
+      ServerControl.exe's "Install Npcap" button. Suricata runs fine installed
+      but without Npcap present - it just can't capture anything yet, and the
+      Control Panel's status line reflects that rather than pretending it works. }
+    Exec(ExpandConstant('{sys}\msiexec.exe'),
+         '/i "' + ExpandConstant('{tmp}\Suricata-7.0.15-1-64bit.msi') + '" /quiet /norestart',
+         '', SW_HIDE, ewWaitUntilTerminated, rc);
 
     { 2. Write a starter .env with strong secrets. MongoDB defaults to localhost;
          set your real database (local or Atlas) in the Server Control Panel. }
