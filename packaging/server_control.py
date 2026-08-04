@@ -48,6 +48,17 @@ CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
 LOCAL_URI = "mongodb://localhost:27017"
 
+# Network detection prerequisites - NOT bundled/silently installed (Npcap's driver
+# install can require a reboot, and Suricata needs the operator to pick the right
+# capture interface), so the Control Panel just links out to the official installers
+# instead of running them unattended. Versions match what packaging/*.iss developers
+# have validated against (Suricata-7.0.15-1-64bit.msi / npcap-1.87.exe elsewhere in
+# this repo) - bump these constants when validating a newer release.
+SURICATA_VERSION = "7.0.15"
+SURICATA_DOWNLOAD_URL = "https://suricata.io/download/"
+NPCAP_VERSION = "1.87"
+NPCAP_DOWNLOAD_URL = "https://npcap.com/#download"
+
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
@@ -337,9 +348,27 @@ class ControlPanel(tk.Tk):
         self._btn(row2, "Stop Server", self._stop, COLORS["bad"])
         self._btn(row2, "Open Dashboard", self._open_dash, COLORS["accent"])
 
+        # --- Network detection prerequisites (Suricata + Npcap) ---
+        tk.Label(self, text="Network Detection (optional)", bg=COLORS["bg"], fg=COLORS["fg"],
+                 font=("Consolas", 9, "bold")).pack(pady=(14, 0))
+        tk.Label(self, text="Required for port-scan / DDoS / C2-beaconing detection. Not required for the "
+                             "dashboard, malware, system or user-behavior detection to work.",
+                 bg=COLORS["bg"], fg=COLORS["hint"], font=("Consolas", 8),
+                 wraplength=620, justify="center").pack(pady=(0, 4))
+        row3 = tk.Frame(self, bg=COLORS["bg"]); row3.pack(pady=4)
+        self._btn(row3, f"Install Suricata {SURICATA_VERSION}", self._open_suricata_download, COLORS["accent"])
+        self._btn(row3, f"Install Npcap {NPCAP_VERSION}", self._open_npcap_download, COLORS["accent"])
+
         tk.Label(self, text=f"Config file: {ENV_PATH}", bg=COLORS["bg"], fg=COLORS["muted"],
                  font=("Consolas", 8)).pack(side="bottom", pady=8)
         self._on_db_type()
+
+    # ---- Network detection prerequisites ------------------------------------
+    def _open_suricata_download(self):
+        webbrowser.open(SURICATA_DOWNLOAD_URL)
+
+    def _open_npcap_download(self):
+        webbrowser.open(NPCAP_DOWNLOAD_URL)
 
     def _btn(self, parent, text, cmd, color):
         tk.Button(parent, text=text, command=cmd, bg=COLORS["panel"], fg=color,
