@@ -81,9 +81,23 @@ except ImportError:
     def _wlb_is_running() -> bool:  # type: ignore[misc]
         return False
 
+# File handler survives regardless of how backend.exe was launched (Control Panel
+# GUI runs it DETACHED with no console, so console-only logging used to leave zero
+# trace of a startup crash/traceback - see Mongo-connect block and agent imports
+# below). Never let logging setup itself prevent startup: fall back to console-only
+# if the directory isn't writable for any reason.
+_log_handlers = [logging.StreamHandler()]
+try:
+    _log_dir = os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"), "CyberSentinel")
+    os.makedirs(_log_dir, exist_ok=True)
+    _log_handlers.append(logging.FileHandler(os.path.join(_log_dir, "backend.log"), encoding="utf-8"))
+except Exception:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
 

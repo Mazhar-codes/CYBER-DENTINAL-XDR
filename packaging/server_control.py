@@ -75,6 +75,13 @@ else:
 
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 BACKEND_EXE = os.path.join(BASE_DIR, "backend.exe")
+# Backend runs DETACHED with no console, so this is the only record of a crash/
+# traceback during startup (model loading, Mongo connect, etc.) - see _start().
+BACKEND_OUT_LOG = os.path.join(BASE_DIR, "backend_out.log")
+BACKEND_ERR_LOG = os.path.join(BASE_DIR, "backend_err.log")
+# Backend.exe is bootstrapped fresh models take up to ~30s to load; the poll loop
+# in _render_status must not report a crash/hang before this grace window elapses.
+SERVER_START_GRACE_SECS = 90
 
 COLORS = {
     "bg": "#0a0f1e", "panel": "#111a2e", "fg": "#c9d6e8",
@@ -132,6 +139,9 @@ def friendly_error(err, uri):
         return "Authentication failed - the username or password in the URI is wrong."
     if "timed out" in e or "serverselection" in e:
         return "Timed out reaching the database - check your internet, or that MongoDB is running."
+    if "certificate_verify_failed" in e or "unable to get local issuer certificate" in e:
+        return ("TLS certificate verification failed - the app's CA bundle may be missing. "
+                "Reinstall the latest Server package, or check your antivirus isn't stripping files.")
     if "ssl" in e or "tls" in e:
         return "TLS/SSL handshake failed - unstable network, or a firewall is blocking the DB port."
     return err[:110]
@@ -479,6 +489,7 @@ class ControlPanel(tk.Tk):
         row3 = tk.Frame(self, bg=COLORS["bg"]); row3.pack(pady=4)
         self._btn(row3, f"Install Suricata {SURICATA_VERSION}", self._open_suricata_download, COLORS["accent"])
         self._btn(row3, f"Install Npcap {NPCAP_VERSION}", self._open_npcap_download, COLORS["accent"])
+        self._btn(row3, "Refresh Interfaces", self._refresh_all_network, COLORS["accent"])
         row4 = tk.Frame(self, bg=COLORS["bg"]); row4.pack(pady=4)
         self._btn(row4, "Start Suricata", self._start_suricata, COLORS["ok"])
         self._btn(row4, "Stop Suricata", self._stop_suricata, COLORS["bad"])
@@ -525,11 +536,24 @@ class ControlPanel(tk.Tk):
             self.iface_var.set(default)
         threading.Thread(target=work, daemon=True).start()
 
+    def _refresh_all_network(self):
+        # Interfaces are only scanned once at startup (self._refresh_interfaces() in
+        # __init__); if Npcap gets installed or the NIC comes up afterward, the
+        # dropdown was stuck at "No active network adapter found" until the whole
+        # app was closed and reopened. Let the operator force a rescan instead.
+        self._refresh_network_status()
+        self._refresh_interfaces()
+
     def _start_suricata(self):
         guid = self._iface_map.get(self.iface_var.get())
         if not guid:
-            messagebox.showerror("No interface", "Select a capture interface first (click Install "
-                                  "Npcap/Suricata if the dropdown is empty, then reopen this panel).")
+            # Try one live rescan before giving up - covers the common case where
+            # Npcap/the NIC only became ready after this panel was first opened.
+            self._iface_map = {i["name"]: i["guid"] for i in list_capture_interfaces()}
+            guid = self._iface_map.get(self.iface_var.get()) or next(iter(self._iface_map.values()), None)
+        if not guid:
+            messagebox.showerror("No interface", "Select a capture interface first (click 'Refresh "
+                                  "Interfaces', or 'Install Npcap/Suricata' if it's still empty).")
             return
         ok, msg = start_suricata(guid)
         if ok:
@@ -910,7 +934,19 @@ class ControlPanel(tk.Tk):
         def work():
             try:
                 import pymongo  # noqa: PLC0415
-                c = pymongo.MongoClient(uri, serverSelectionTimeoutMS=9000)
+                kwargs = {"serverSelectionTimeoutMS": 9000}
+                # pymongo prefers certifi's CA bundle over the OS trust store when
+                # certifi is importable - if the frozen exe didn't bundle certifi's
+                # cacert.pem data file (only the .py module), tlsCAFile ends up
+                # pointing at a path that doesn't exist and every TLS handshake to
+                # Atlas fails. Force it explicitly so we control what's actually used.
+                if "mongodb+srv://" in uri.lower() or re.search(r"[?&](tls|ssl)=true", uri, re.I):
+                    try:
+                        import certifi  # noqa: PLC0415
+                        kwargs["tlsCAFile"] = certifi.where()
+                    except Exception:
+                        pass
+                c = pymongo.MongoClient(uri, **kwargs)
                 c.admin.command("ping")
                 c.close()
                 self.status.config(text="Database: CONNECTED", fg=COLORS["ok"])
@@ -923,8 +959,15 @@ class ControlPanel(tk.Tk):
             messagebox.showerror("Not found", f"backend.exe not found at:\n{BACKEND_EXE}")
             return
         try:
-            subprocess.Popen([BACKEND_EXE], cwd=BASE_DIR,
-                             creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS, close_fds=True)
+            # Redirect to disk: backend.exe runs DETACHED with no console, so without
+            # this any startup crash/traceback (missing model file, Mongo error, etc.)
+            # simply vanishes and the panel is left with no way to explain a failure.
+            with open(BACKEND_OUT_LOG, "w", encoding="utf-8", errors="replace") as out_f, \
+                    open(BACKEND_ERR_LOG, "w", encoding="utf-8", errors="replace") as err_f:
+                subprocess.Popen([BACKEND_EXE], cwd=BASE_DIR,
+                                 creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS, close_fds=True,
+                                 stdout=out_f, stderr=err_f)
+            self._server_start_ts = time.time()
             self.status.config(text="Server starting (models load ~30s)...", fg=COLORS["accent"])
         except Exception as e:
             messagebox.showerror("Start failed", str(e))
@@ -967,13 +1010,34 @@ class ControlPanel(tk.Tk):
         if getattr(self, "_progress_active", False):
             return
         cur = self.status.cget("text")
-        if (cur.startswith("Testing") or cur.startswith("Server starting")
-                or cur.startswith("Database:") or cur.startswith("Installing MongoDB")):
+        if cur.startswith("Server starting"):
+            # This used to be a permanent guard: once set, the 4s poll loop could
+            # never overwrite it, so a crashed or hung backend.exe left the panel
+            # stuck on "Server starting..." forever with no way to tell the user
+            # anything was wrong. Now: keep waiting only while the process is
+            # actually alive AND still inside the model-load grace window.
+            elapsed = time.time() - getattr(self, "_server_start_ts", 0)
+            if not running:
+                self.status.config(
+                    text=f"Server: CRASHED on startup - see backend_err.log in {BASE_DIR}",
+                    fg=COLORS["bad"])
+                return
+            if elapsed < SERVER_START_GRACE_SECS:
+                return
+            # Past the grace window and still no /health response - fall through
+            # to render the real (stalled) state below instead of lying forever.
+        elif (cur.startswith("Testing") or cur.startswith("Database:")
+                or cur.startswith("Installing MongoDB")):
             return
         if running:
-            db = "DB connected" if mongo else ("DB OFFLINE" if mongo is False else "DB checking")
-            col = COLORS["ok"] if mongo else COLORS["bad"] if mongo is False else COLORS["muted"]
-            self.status.config(text=f"Server: RUNNING  |  {db}", fg=col)
+            if mongo is None:
+                self.status.config(
+                    text=f"Server: RUNNING but not responding on its port yet - see backend_err.log in {BASE_DIR}",
+                    fg=COLORS["bad"])
+            else:
+                db = "DB connected" if mongo else "DB OFFLINE"
+                col = COLORS["ok"] if mongo else COLORS["bad"]
+                self.status.config(text=f"Server: RUNNING  |  {db}", fg=col)
         else:
             self.status.config(text="Server: STOPPED", fg=COLORS["muted"])
 
