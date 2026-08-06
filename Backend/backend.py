@@ -383,13 +383,17 @@ def _check_windows_privileges() -> dict:
     return result
 
 
+_LAST_RECONNECT_ATTEMPT_TS = 0.0
+_RECONNECT_COOLDOWN_SECS = 15.0
+
+
 def _ensure_db_connected() -> bool:
     """
     Ping MongoDB and return True if the connection is healthy.
     Attempts a single reconnect if the current client is unresponsive.
     Never raises — returns False on any failure.
     """
-    global _mongo, _db, MONGO_OK
+    global _mongo, _db, MONGO_OK, _LAST_RECONNECT_ATTEMPT_TS
     try:
         if _db is not None:
             _db.command("ping")
@@ -397,6 +401,18 @@ def _ensure_db_connected() -> bool:
             return True
     except Exception as _ping_exc:
         logger.warning("[DB] MongoDB ping failed: %s — attempting reconnect", _ping_exc)
+
+    # _ensure_db_connected() is called from /health, which the Server Control
+    # Panel polls every 4s. Without a cooldown, every single poll while Mongo
+    # is down paid a fresh ~5s reconnect dial-out, which routinely exceeded
+    # the panel's own 3s /health timeout — making the panel show "RUNNING but
+    # not responding" even though the rest of the server was serving requests
+    # fine. Skip the retry (and just report the last known state) if the last
+    # attempt was too recent.
+    _now_ts = time.time()
+    if _db is None and (_now_ts - _LAST_RECONNECT_ATTEMPT_TS) < _RECONNECT_COOLDOWN_SECS:
+        return MONGO_OK
+    _LAST_RECONNECT_ATTEMPT_TS = _now_ts
 
     # Attempt reconnect
     try:

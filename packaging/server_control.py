@@ -972,6 +972,29 @@ class ControlPanel(tk.Tk):
         if not os.path.exists(BACKEND_EXE):
             messagebox.showerror("Not found", f"backend.exe not found at:\n{BACKEND_EXE}")
             return
+        # If backend.exe is already running, restart it so config changes made
+        # in this panel (DB URI, port, etc.) actually take effect. Previously
+        # this just spawned a second process that instantly exited via the
+        # single-instance guard (port 8123) while silently leaving the OLD
+        # process - with its OLD settings - running untouched, which is why
+        # switching Database from Local to Atlas (or any other Save Config
+        # change) never seemed to do anything after the server was started once.
+        try:
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq backend.exe"],
+                                 creationflags=CREATE_NO_WINDOW, capture_output=True, text=True)
+            already_running = "backend.exe" in (out.stdout or "")
+        except Exception:
+            already_running = False
+        if already_running:
+            self.status.config(text="Server already running - restarting with current settings...",
+                               fg=COLORS["accent"])
+            self.update_idletasks()
+            try:
+                subprocess.run(["taskkill", "/IM", "backend.exe", "/F"],
+                               creationflags=CREATE_NO_WINDOW, capture_output=True)
+            except Exception:
+                pass
+            time.sleep(2)  # let the single-instance lock (port 8123) and port 8000 free up
         try:
             # Redirect to disk: backend.exe runs DETACHED with no console, so without
             # this any startup crash/traceback (missing model file, Mongo error, etc.)

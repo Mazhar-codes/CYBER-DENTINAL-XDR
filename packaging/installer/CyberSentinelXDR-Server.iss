@@ -15,7 +15,7 @@
 ;
 ;  BUILD:
 ;    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" CyberSentinelXDR-Server.iss
-;  Output: C:\csxb\installer_out\CyberSentinelXDR-Server-Setup-1.0.3.exe
+;  Output: C:\csxb\installer_out\CyberSentinelXDR-Server-Setup-1.0.4.exe
 ;
 ;  NOTE: MongoDB is NOT bundled. The config page asks for MONGO_URI - default is
 ;  a local MongoDB (mongodb://localhost:27017, requires MongoDB installed on this
@@ -30,7 +30,7 @@
 ; ============================================================================
 
 #define MyAppName    "Cyber Sentinel XDR Server"
-#define MyAppVersion "1.0.3"
+#define MyAppVersion "1.0.4"
 #define MyPublisher  "Cyber Sentinel XDR"
 #define BackendExe   "backend.exe"
 #define ControlExe   "ServerControl.exe"

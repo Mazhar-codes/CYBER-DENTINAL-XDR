@@ -59,9 +59,12 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    # console=True for now so `--simulate` output is visible during testing.
-    # For the silent background service build, flip this to False.
-    console=True,
+    # No console: the boot-time scheduled task runs this non-interactively as
+    # SYSTEM (no window regardless), and AgentControl.exe's Start Agent always
+    # redirects stdout/stderr to agent_out.log/agent_err.log - so a console
+    # subsystem only ever risked an unwanted flash if launched some other way.
+    # For `--simulate` testing, run from source instead: `python agent.py --simulate`.
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

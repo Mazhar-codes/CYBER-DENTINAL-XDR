@@ -97,6 +97,7 @@ export default function RegisterPage() {
   const validate = (): boolean => {
     let valid = true;
     if (!username.value || username.value.length < 3) { setUsernameError('Username must be at least 3 characters'); valid = false; }
+    else if (!/^[a-zA-Z0-9_\-.]+$/.test(username.value)) { setUsernameError('Username can only contain letters, numbers, . _ - (no @ or spaces — use the Email field for your email)'); valid = false; }
     if (!email.value || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value)) { setEmailError('Invalid email address'); valid = false; }
     if (!password.value || strength < 2) { setPasswordError('Password too weak (at least Fair)'); valid = false; }
     if (password.value !== confirm.value) { setConfirmError('Passwords do not match'); valid = false; }
