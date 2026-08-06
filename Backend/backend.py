@@ -549,9 +549,16 @@ _MALWARE_DIRECT_COOLDOWN: float = 60.0
 _endpoint_engines: dict = {}   # {endpoint_id: FusionDecisionEngine}
 
 # ---------------------------------------------------------------------------
-# Capture process management (Suricata + Winlogbeat)
+# Capture process management (Winlogbeat)
+#
+# Suricata is deliberately NOT started/stopped from here — the Server Control
+# Panel (ServerControl.exe) owns its entire lifecycle via its own dedicated
+# Start Suricata / Stop Suricata buttons. Starting it a second time from
+# /start-monitoring meant the frontend's "Start Monitoring" button and the
+# panel's Suricata button could both try to launch suricata.exe against the
+# same capture interface, which is redundant at best and a resource/port
+# conflict at worst.
 # ---------------------------------------------------------------------------
-_suricata_proc: Optional[subprocess.Popen] = None
 _winlogbeat_proc: Optional[subprocess.Popen] = None
 
 _BASE = Path(__file__).parent
@@ -698,57 +705,6 @@ async def _sysmon_ps_loop() -> None:
         except Exception as exc:
             logger.debug(f"Sysmon PS forwarder: loop error: {exc}")
 
-def _detect_capture_interface() -> str:
-    """Resolve the Suricata ``-i`` device path for the active capture NIC.
-
-    Precedence:
-      1. ``XDR_SURICATA_INTERFACE`` env var (full ``\\Device\\NPF_{GUID}`` or bare ``{GUID}``).
-      2. Auto-detect: the 'Up' adapter that owns the default IPv4 gateway — i.e. the
-         NIC actually carrying traffic — via Get-NetAdapter. This is why capture
-         works on Wi-Fi OR Ethernet with no hardcoded GUID that silently breaks when
-         an adapter is reinstalled (the previous hardcoded GUID no longer existed on
-         this machine, so Suricata bound a dead interface → "0 flows").
-      3. Fallback to the first 'Up' adapter's GUID.
-
-    Returns a ``\\Device\\NPF_{GUID}`` string.
-    """
-    override = os.environ.get("XDR_SURICATA_INTERFACE", "").strip()
-    if override:
-        return override if override.lower().startswith(r"\device\npf_") else (r"\Device\NPF_" + override)
-
-    ps = (
-        "$ErrorActionPreference='SilentlyContinue';"
-        "$g=Get-NetIPConfiguration|Where-Object{$_.IPv4DefaultGateway -ne $null}|Select-Object -First 1;"
-        "if($g){(Get-NetAdapter -InterfaceIndex $g.InterfaceIndex).InterfaceGuid}"
-        "else{(Get-NetAdapter|Where-Object{$_.Status -eq 'Up'}|Select-Object -First 1).InterfaceGuid}"
-    )
-    try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            capture_output=True, text=True, timeout=15,
-            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
-        ).stdout.strip()
-        if out.startswith("{") and out.endswith("}") and len(out) >= 34:
-            dev = r"\Device\NPF_" + out
-            logger.info("[SURICATA] auto-detected capture interface: %s", dev)
-            return dev
-        logger.warning("[SURICATA] interface auto-detect returned unexpected output: %r", out)
-    except Exception as exc:
-        logger.warning("[SURICATA] interface auto-detect failed: %s", exc)
-
-    fallback = r"\Device\NPF_{C7587D8E-1D41-4684-A70D-C30AEC5E8926}"
-    logger.warning("[SURICATA] falling back to hardcoded interface %s", fallback)
-    return fallback
-
-
-def _build_suricata_cmd() -> list:
-    """Build the Suricata command with the interface resolved at start time."""
-    return [
-        r"C:\Program Files\Suricata\suricata.exe",
-        "-c", r"C:\Program Files\Suricata\suricata.yaml",
-        "-i", _detect_capture_interface(),
-        "-l", r"C:\SuricataLogs",
-    ]
 _WINLOGBEAT_CMD = [
     str(_WINLOGBEAT_DIR / "winlogbeat.exe"),
     "-c", str(_WINLOGBEAT_DIR / "winlogbeat.yml"),
@@ -757,14 +713,14 @@ _WINLOGBEAT_CMD = [
 
 
 def _start_capture_processes() -> dict:
-    global _suricata_proc, _winlogbeat_proc
+    global _winlogbeat_proc
     status = {}
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
 
     _wb_log = _WINLOGBEAT_DIR / "logs" / "winlogbeat_stderr.log"
     _wb_log.parent.mkdir(parents=True, exist_ok=True)
 
-    _procs_to_start = [("suricata", _build_suricata_cmd(), "_suricata_proc", None)]
+    _procs_to_start = []
     if settings.start_winlogbeat:
         _procs_to_start.append(("winlogbeat", _WINLOGBEAT_CMD, "_winlogbeat_proc", str(_WINLOGBEAT_DIR)))
 
@@ -798,9 +754,9 @@ def _start_capture_processes() -> dict:
 
 
 def _stop_capture_processes() -> dict:
-    global _suricata_proc, _winlogbeat_proc
+    global _winlogbeat_proc
     status = {}
-    _procs_to_stop = [("suricata", "_suricata_proc")]
+    _procs_to_stop = []
     if settings.start_winlogbeat:
         _procs_to_stop.append(("winlogbeat", "_winlogbeat_proc"))
     for name, proc_attr in _procs_to_stop:

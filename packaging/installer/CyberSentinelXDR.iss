@@ -23,7 +23,7 @@
 ; ============================================================================
 
 #define MyAppName    "Cyber Sentinel XDR"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.3"
 #define MyPublisher  "Cyber Sentinel XDR"
 #define AgentExe     "CyberSentinelAgent.exe"
 #define AgentControlExe "AgentControl.exe"

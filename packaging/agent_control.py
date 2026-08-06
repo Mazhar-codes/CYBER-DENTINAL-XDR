@@ -15,6 +15,8 @@ Build:
 """
 import json
 import os
+import queue
+import socket
 import subprocess
 import sys
 import threading
@@ -22,7 +24,7 @@ import time
 import tkinter as tk
 import urllib.request
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
@@ -99,13 +101,134 @@ def write_run_agent_cmd(values: dict) -> None:
         pass
 
 
+class LogViewerWindow(tk.Toplevel):
+    """
+    Live-tailing, scrollable log viewer - a "cmd window" tab per log file that
+    keeps following new lines as they're written, instead of the operator
+    having to open agent_out.log/agent_err.log in Notepad and re-open it to
+    see anything new.
+
+    Runs a background thread per file (tail -f style: read what's new since
+    the last poll) that pushes text into a queue.Queue; the Tk main loop
+    drains those queues on a timer - Tkinter widgets are not thread-safe, so
+    nothing touches the Text widget directly from the background thread.
+    """
+
+    MAX_LINES = 4000       # scrollback cap so a noisy log can't grow unbounded
+    POLL_MS = 300
+    TAIL_INTERVAL_S = 0.5
+
+    def __init__(self, parent, title, log_paths: dict, base_dir: str):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("900x560")
+        self.minsize(520, 320)
+        self.configure(bg=COLORS["bg"])
+
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self._stop = False
+        self._queues: dict[str, queue.Queue] = {}
+        self._texts: dict[str, tk.Text] = {}
+
+        for label, path in log_paths.items():
+            frame = tk.Frame(nb, bg=COLORS["bg"])
+            nb.add(frame, text=label)
+            frame.grid_rowconfigure(0, weight=1)
+            frame.grid_columnconfigure(0, weight=1)
+
+            text = tk.Text(frame, bg="#000000", fg="#33ff77", insertbackground="#33ff77",
+                           font=("Consolas", 9), wrap="none", state="disabled", borderwidth=0)
+            vsb = tk.Scrollbar(frame, orient="vertical", command=text.yview)
+            hsb = tk.Scrollbar(frame, orient="horizontal", command=text.xview)
+            text.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+            text.grid(row=0, column=0, sticky="nsew")
+            vsb.grid(row=0, column=1, sticky="ns")
+            hsb.grid(row=1, column=0, sticky="ew")
+
+            q: queue.Queue = queue.Queue()
+            self._queues[label] = q
+            self._texts[label] = text
+
+            threading.Thread(target=self._tail_file, args=(path, q), daemon=True).start()
+
+        tk.Label(self, text=f"Log folder: {base_dir}", bg=COLORS["bg"], fg=COLORS["muted"],
+                 font=("Consolas", 8)).pack(side="bottom", pady=(0, 6))
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._poll_queues()
+
+    def _tail_file(self, path: str, q: "queue.Queue") -> None:
+        pos = 0
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    back = min(size, 40_000)  # show recent history on open (~last few hundred lines)
+                    f.seek(size - back)
+                    if back < size:
+                        f.readline()  # drop a possibly-partial first line
+                    initial = f.read()
+                    pos = f.tell()
+                    if initial:
+                        q.put(initial)
+        except Exception:
+            pass
+
+        while not self._stop:
+            time.sleep(self.TAIL_INTERVAL_S)
+            try:
+                if not os.path.exists(path):
+                    continue
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    if size < pos:
+                        pos = 0  # file was truncated (e.g. Start Agent was clicked again)
+                    f.seek(pos)
+                    chunk = f.read()
+                    pos = f.tell()
+                if chunk:
+                    q.put(chunk)
+            except Exception:
+                pass
+
+    def _poll_queues(self):
+        if self._stop:
+            return
+        for label, q in self._queues.items():
+            text = self._texts[label]
+            appended = False
+            while True:
+                try:
+                    chunk = q.get_nowait()
+                except queue.Empty:
+                    break
+                text.configure(state="normal")
+                text.insert("end", chunk)
+                appended = True
+            if appended:
+                line_count = int(text.index("end-1c").split(".")[0])
+                if line_count > self.MAX_LINES:
+                    text.delete("1.0", f"{line_count - self.MAX_LINES}.0")
+                text.see("end")
+                text.configure(state="disabled")
+        self.after(self.POLL_MS, self._poll_queues)
+
+    def _on_close(self):
+        self._stop = True
+        self.destroy()
+
+
 class AgentControlPanel(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Cyber Sentinel XDR - Endpoint Agent Control Panel")
         self.configure(bg=COLORS["bg"])
-        self.geometry("680x560")
-        self.minsize(640, 520)
+        self.geometry("780x600")
+        self.minsize(740, 560)
         self.resizable(True, True)
 
         cfg = read_config()
@@ -154,6 +277,7 @@ class AgentControlPanel(tk.Tk):
         self._btn(row1, "Save Config", self._save, COLORS["accent"])
         self._btn(row1, "Start Agent", self._start, COLORS["ok"])
         self._btn(row1, "Stop Agent", self._stop, COLORS["bad"])
+        self._btn(row1, "View Logs", self._view_logs, COLORS["accent"])
 
         tk.Label(self, text=f"Config file: {CONFIG_PATH}", bg=COLORS["bg"], fg=COLORS["muted"],
                  font=("Consolas", 8)).pack(side="bottom", pady=8)
@@ -246,6 +370,14 @@ class AgentControlPanel(tk.Tk):
         except Exception as e:
             messagebox.showerror("Stop failed", str(e))
 
+    def _view_logs(self):
+        LogViewerWindow(
+            self,
+            "Cyber Sentinel XDR - Endpoint Agent Logs",
+            {"Output (agent_out.log)": AGENT_OUT_LOG, "Errors (agent_err.log)": AGENT_ERR_LOG},
+            BASE_DIR,
+        )
+
     # ------------------------------------------------------------------
     def _poll_status(self):
         def work():
@@ -291,6 +423,36 @@ class AgentControlPanel(tk.Tk):
             fg=COLORS["ok"])
 
 
+_SINGLETON_GUARD_PORT = 8766  # distinct from the agent's own :8765 health port
+_singleton_guard_sock = None
+
+
+def _acquire_singleton_lock() -> bool:
+    """
+    Bind a loopback TCP port for the lifetime of this process so a second
+    double-click of the shortcut can't open a duplicate window silently
+    stacked on top of the first - two independent processes both able to
+    Start/Stop the agent, with no visible sign a second one exists. The
+    socket is deliberately never closed - it's released when this process exits.
+    """
+    global _singleton_guard_sock
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", _SINGLETON_GUARD_PORT))
+        sock.listen(1)
+    except OSError:
+        return False
+    _singleton_guard_sock = sock
+    return True
+
+
 if __name__ == "__main__":
+    if not _acquire_singleton_lock():
+        messagebox.showinfo(
+            "Already running",
+            "Cyber Sentinel XDR Endpoint Agent Control Panel is already open.\n\n"
+            "Check your taskbar / system tray for the existing window.",
+        )
+        sys.exit(0)
     app = AgentControlPanel()
     app.mainloop()
