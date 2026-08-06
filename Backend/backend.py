@@ -42,7 +42,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import settings
 import os
 os.environ.setdefault("USER_LOG_DIR", r"C:\winlogbeat\logs")
-os.environ.setdefault("USER_MODEL_DIR", str(Path(__file__).parent.parent / "User Behavior" / "final_model_backend_only"))
+# Use config.settings' own MEIPASS-aware computation (config.py:69) rather than
+# recomputing from __file__ here — in the frozen build backend.py is bundled as
+# a flat top-level module, so Path(__file__).parent.parent overshoots one level
+# past the _internal folder and points at the install root, breaking
+# xdr_runtime.py's user_model.pkl lookup (falls through to os.getenv(...)).
+os.environ.setdefault("USER_MODEL_DIR", settings.user_model_dir)
 
 from agents.network_detection_agent import NetworkDetectionAgent
 from agents.user_behavior_agent import UserBehaviorAgent, _DEFAULT_RULES as _DEFAULT_USER_RULES
@@ -160,6 +165,24 @@ try:
 except ImportError:
     _OperationFailure = None  # type: ignore
 
+def _mongo_tls_kwargs(uri: str) -> dict:
+    """
+    pymongo prefers certifi's CA bundle over the OS trust store when certifi is
+    importable — if the frozen exe's OS trust store is incomplete (common on a
+    fresh Windows install), the TLS handshake to Atlas fails with
+    CERTIFICATE_VERIFY_FAILED. Force certifi's bundled cacert.pem explicitly so
+    the frozen backend.exe never depends on the OS store for Atlas connections.
+    """
+    kwargs: dict = {}
+    if "mongodb+srv://" in uri.lower() or re.search(r"[?&](tls|ssl)=true", uri, re.I):
+        try:
+            import certifi  # noqa: PLC0415
+            kwargs["tlsCAFile"] = certifi.where()
+        except Exception:
+            pass
+    return kwargs
+
+
 try:
     from pymongo import MongoClient, DESCENDING, ASCENDING
     _mongo = MongoClient(
@@ -167,6 +190,7 @@ try:
         serverSelectionTimeoutMS=20_000,   # Atlas SRV needs DNS lookup + TLS — give 20 s
         connectTimeoutMS=20_000,
         socketTimeoutMS=30_000,
+        **_mongo_tls_kwargs(settings.mongo_uri),
     )
     _db = _mongo[settings.mongo_db]
     _db.command("ping")
@@ -382,6 +406,7 @@ def _ensure_db_connected() -> bool:
             serverSelectionTimeoutMS=5_000,
             connectTimeoutMS=5_000,
             socketTimeoutMS=10_000,
+            **_mongo_tls_kwargs(settings.mongo_uri),
         )
         _new_db = _new_mongo[settings.mongo_db]
         _new_db.command("ping")

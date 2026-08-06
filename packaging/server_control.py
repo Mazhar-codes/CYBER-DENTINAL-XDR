@@ -251,8 +251,12 @@ class ControlPanel(tk.Tk):
         super().__init__()
         self.title("Cyber Sentinel XDR - Server Control Panel")
         self.configure(bg=COLORS["bg"])
-        self.geometry("700x600")
-        self.minsize(620, 560)
+        # 700x600 was too small to fit every row without maximizing (the
+        # Suricata/Npcap/Refresh button row and bottom rows were pushed off
+        # the visible window) - sized to fit the full stacked layout at 100%
+        # DPI scaling without requiring the user to maximize the window.
+        self.geometry("900x860")
+        self.minsize(860, 820)
         self.resizable(True, True)
 
         _, values = read_env()
@@ -487,8 +491,11 @@ class ControlPanel(tk.Tk):
         self._iface_map = {}  # display name -> adapter GUID
 
         row3 = tk.Frame(self, bg=COLORS["bg"]); row3.pack(pady=4)
-        self._btn(row3, f"Install Suricata {SURICATA_VERSION}", self._open_suricata_download, COLORS["accent"])
-        self._btn(row3, f"Install Npcap {NPCAP_VERSION}", self._open_npcap_download, COLORS["accent"])
+        # Version numbers dropped from the button labels (still shown in
+        # net_status above) so this row stays narrow enough not to clip
+        # horizontally at the window's minimum width.
+        self._btn(row3, "Install Suricata", self._open_suricata_download, COLORS["accent"])
+        self._btn(row3, "Install Npcap", self._open_npcap_download, COLORS["accent"])
         self._btn(row3, "Refresh Interfaces", self._refresh_all_network, COLORS["accent"])
         row4 = tk.Frame(self, bg=COLORS["bg"]); row4.pack(pady=4)
         self._btn(row4, "Start Suricata", self._start_suricata, COLORS["ok"])
@@ -578,12 +585,19 @@ class ControlPanel(tk.Tk):
             if "localhost" not in self.uri.get() and "127.0.0.1" not in self.uri.get():
                 self._atlas_cache = self.uri.get()
             self.uri.set(LOCAL_URI)
+            # Local mode's URI is fixed (no login) - lock the field so it can't
+            # silently drift out of sync with the radio selection (previously
+            # the Entry stayed editable, so pasting/typing an Atlas string here
+            # while "Local MongoDB" was selected went unnoticed and unsaved-Save
+            # would persist the mismatch).
+            self.uri_entry.config(state="readonly")
             self.hint.config(text="Local mode: uses a MongoDB installed on THIS computer. No account, username or "
                                   "password is needed - local MongoDB has no login. Click 'Setup Local DB' to "
                                   "download + install it automatically (shows a progress %). The 27 collections "
                                   "are created automatically on first start.")
             self._local_status()
         else:
+            self.uri_entry.config(state="normal")
             if "localhost" in self.uri.get() or "127.0.0.1" in self.uri.get():
                 self.uri.set(self._atlas_cache)
             self.hint.config(text="Atlas mode: paste your MongoDB Atlas connection string. Tip: if a "

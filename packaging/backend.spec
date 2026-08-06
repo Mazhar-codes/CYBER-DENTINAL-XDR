@@ -147,7 +147,14 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,               # UPX + torch DLLs is a known crash source — keep off
-    console=True,
+    # Windows subsystem (no console): stdout/stderr are always redirected to
+    # backend_out.log/backend_err.log by server_control.py's Popen (and to
+    # ProgramData\CyberSentinel\backend.log via logging.FileHandler), so a
+    # console window is never needed and would only ever appear as an
+    # unwanted flicker if backend.exe is ever invoked outside that hidden
+    # launch path (stale shortcut, AV rescan, double-click, singleton-guard
+    # fast exit, etc.).
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
